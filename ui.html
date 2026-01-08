@@ -1,0 +1,212 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>Placeholders Replace & Restore</title>
+        <style>
+            body {
+                font-family:
+                    Inter,
+                    system-ui,
+                    -apple-system,
+                    "Segoe UI",
+                    Roboto,
+                    "Helvetica Neue",
+                    Arial;
+                padding: 12px;
+                background-color: #c6c6c6;
+            }
+            label {
+                display: block;
+                margin-top: 8px;
+            }
+            select,
+            button {
+                margin-top: 6px;
+            }
+            .row {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                margin-top: 8px;
+            }
+            .status {
+                margin-top: 10px;
+                color: #333;
+                font-size: 13px;
+            }
+            small {
+                color: #666;
+            }
+            #minimized-view {
+                display: none;
+                align-items: center;
+                justify-content: space-between;
+                height: 100%;
+            }
+            body.minimized {
+                padding: 8px;
+            }
+            body.minimized #main-view {
+                display: none;
+            }
+            body.minimized #minimized-view {
+                display: flex;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="main-view">
+            <h3>Placeholders Replace & Restore</h3>
+            <p>
+                <small
+                    >When you finish editing text (select away), @keyword →
+                    value. When you select text again, it restores @keyword for
+                    editing. The plugin window must remain open for this to
+                    work.</small
+                >
+            </p>
+
+            <label
+                >Variable collection:
+                <select id="collection"></select>
+            </label>
+
+            <div class="row">
+                <label
+                    ><input id="toggle" type="checkbox" checked /> Enable
+                    automatic replace/restore</label
+                >
+            </div>
+
+            <div class="row">
+                <button id="run">Run replace on selection</button>
+                <button id="restore">Restore placeholders on selection</button>
+            </div>
+            <div class="row">
+                <button id="minimize">Minimize</button>
+                <button id="hide">Hide</button>
+                <button id="close">Stop Plugin</button>
+            </div>
+
+            <div class="status" id="status">Loading collections…</div>
+        </div>
+
+        <div id="minimized-view">
+            <span style="font-size: 11px; color: #333; font-weight: 600"
+                >✅ Active</span
+            >
+            <button id="maximize">Expand</button>
+        </div>
+
+        <script>
+            const collectionEl = document.getElementById("collection");
+            const toggleEl = document.getElementById("toggle");
+            const statusEl = document.getElementById("status");
+            const runBtn = document.getElementById("run");
+            const restoreBtn = document.getElementById("restore");
+            const minimizeBtn = document.getElementById("minimize");
+            const hideBtn = document.getElementById("hide");
+            const closeBtn = document.getElementById("close");
+            const maximizeBtn = document.getElementById("maximize");
+
+            parent.postMessage({ pluginMessage: { type: "init" } }, "*");
+
+            onmessage = (event) => {
+                const msg = event.data.pluginMessage;
+                if (!msg) return;
+                if (msg.type === "init") {
+                    collectionEl.innerHTML = "";
+                    msg.collections.forEach((name) => {
+                        const opt = document.createElement("option");
+                        opt.value = name;
+                        opt.textContent = name;
+                        collectionEl.appendChild(opt);
+                    });
+                    const createOpt = document.createElement("option");
+                    createOpt.value = "CopyVariables (plugin)";
+                    createOpt.textContent = 'Create "CopyVariables (plugin)"';
+                    collectionEl.appendChild(createOpt);
+
+                    toggleEl.checked = !!msg.enabled;
+                    if (msg.collection) collectionEl.value = msg.collection;
+                    statusEl.textContent = `Feature ${toggleEl.checked ? "ON" : "OFF"} • collection: ${collectionEl.value}`;
+                } else if (msg.type === "status") {
+                    statusEl.textContent = msg.text;
+                } else if (msg.type === "run-result") {
+                    statusEl.textContent = `Done: ${msg.results.length} nodes processed. Check console for details.`;
+                    console.log("run-result", msg.results);
+                }
+            };
+
+            function sendSettings() {
+                parent.postMessage(
+                    {
+                        pluginMessage: {
+                            type: "set",
+                            enabled: toggleEl.checked,
+                            collection: collectionEl.value,
+                        },
+                    },
+                    "*",
+                );
+                statusEl.textContent = `Feature ${toggleEl.checked ? "ON" : "OFF"} • collection: ${collectionEl.value}`;
+            }
+
+            collectionEl.onchange = sendSettings;
+            toggleEl.onchange = sendSettings;
+
+            runBtn.onclick = () => {
+                parent.postMessage(
+                    { pluginMessage: { type: "run-on-selection" } },
+                    "*",
+                );
+                statusEl.textContent = "Running replace on selection…";
+            };
+
+            restoreBtn.onclick = () => {
+                parent.postMessage(
+                    { pluginMessage: { type: "restore-on-selection" } },
+                    "*",
+                );
+                statusEl.textContent = "Restoring placeholders on selection…";
+            };
+
+            minimizeBtn.onclick = () => {
+                document.body.classList.add("minimized");
+                parent.postMessage(
+                    {
+                        pluginMessage: {
+                            type: "resize",
+                            width: 140,
+                            height: 60,
+                        },
+                    },
+                    "*",
+                );
+            };
+
+            hideBtn.onclick = () => {
+                parent.postMessage({ pluginMessage: { type: "hide" } }, "*");
+            };
+
+            maximizeBtn.onclick = () => {
+                document.body.classList.remove("minimized");
+                parent.postMessage(
+                    {
+                        pluginMessage: {
+                            type: "resize",
+                            width: 420,
+                            height: 320,
+                        },
+                    },
+                    "*",
+                );
+            };
+
+            closeBtn.onclick = () => {
+                parent.postMessage({ pluginMessage: { type: "close" } }, "*");
+            };
+        </script>
+    </body>
+</html>
