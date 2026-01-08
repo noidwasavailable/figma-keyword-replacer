@@ -1,4 +1,4 @@
-Figma Keyword Replacer (Substring)
+# Figma Keyword Replacer (Substring)
 
 For some reason, Figma string variables cannot be used within a larger string. This plugin enables it.
 
