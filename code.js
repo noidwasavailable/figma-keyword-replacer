@@ -93,7 +93,11 @@ async function replacePlaceholdersInNode(node, collectionName) {
   while ((m = PLACEHOLDER_REGEX.exec(text)) !== null) {
     matches.push({ key: m[1], start: m.index, len: m[0].length });
   }
-  if (!matches.length) return { changed: false };
+  if (!matches.length) {
+    // Clear backup if no placeholders are found to prevent restoring stale data
+    clearNodeBackup(node);
+    return { changed: false };
+  }
 
   const collection = await getOrCreateCollection(
     collectionName || DEFAULT_COLLECTION_NAME,
