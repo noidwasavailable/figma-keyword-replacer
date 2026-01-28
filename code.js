@@ -4,7 +4,7 @@
 
 /* CONFIG */
 const PLACEHOLDER_REGEX = /@([a-zA-Z0-9_.\-\/]+)/g;
-const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON: { original: "...", vars: {key: value}, collection: "name" }
+const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON: { original: "...", vars: {key: value}, collection: "name", replacements: [...] }
 const DOC_SETTINGS_KEY = "prr:settings";
 const DEFAULT_COLLECTION_NAME = "Keywords";
 
@@ -50,11 +50,18 @@ async function resolveVariableValue(variable, consumer) {
 }
 
 /* Save backup to node pluginData */
-function saveNodeBackup(node, originalText, snapshot, collectionName) {
+function saveNodeBackup(
+  node,
+  originalText,
+  snapshot,
+  collectionName,
+  replacements,
+) {
   const payload = {
     original: originalText,
     snapshot: snapshot || {},
     collection: collectionName || DEFAULT_COLLECTION_NAME,
+    replacements: replacements || [],
     ts: Date.now(),
   };
   try {
@@ -91,7 +98,7 @@ async function replacePlaceholdersInNode(node, collectionName) {
   let m;
   const matches = [];
   while ((m = PLACEHOLDER_REGEX.exec(text)) !== null) {
-    matches.push({ key: m[1], start: m.index, len: m[0].length });
+    matches.push({ key: m[1], start: m.index, len: m[0].length, text: m[0] });
   }
   if (!matches.length) {
     // Clear backup if no placeholders are found to prevent restoring stale data
@@ -102,50 +109,110 @@ async function replacePlaceholdersInNode(node, collectionName) {
   const collection = await getOrCreateCollection(
     collectionName || DEFAULT_COLLECTION_NAME,
   );
+
   const snapshot = {};
-  // Replacement: build new text left→right
-  let out = "";
-  let lastIndex = 0;
+  const replacements = [];
+  const ops = [];
+  let runningDelta = 0;
+
   for (const mm of matches) {
-    out += text.slice(lastIndex, mm.start);
     const variable = await findStringVariable(mm.key, collection);
+    let resolvedValue = null;
 
     if (variable) {
-      const resolved = await resolveVariableValue(variable, node);
-      const replacement =
-        typeof resolved === "string"
-          ? resolved
-          : String(resolved ? resolved : "");
-      out += replacement;
-      snapshot[mm.key] = replacement;
-    } else {
-      // Not found, keep original text
-      out += text.slice(mm.start, mm.start + mm.len);
+      const val = await resolveVariableValue(variable, node);
+      resolvedValue = typeof val === "string" ? val : String(val || "");
     }
-    lastIndex = mm.start + mm.len;
+
+    // If variable not found, skip replacement
+    if (resolvedValue === null) {
+      continue;
+    }
+
+    snapshot[mm.key] = resolvedValue;
+
+    // Track for restoration
+    const finalStart = mm.start + runningDelta;
+    replacements.push({
+      start: finalStart,
+      len: resolvedValue.length,
+      originalText: mm.text,
+    });
+
+    // Track for replacement
+    ops.push({
+      start: mm.start,
+      removeLen: mm.len,
+      insertText: resolvedValue,
+    });
+
+    runningDelta += resolvedValue.length - mm.len;
   }
-  out += text.slice(lastIndex);
+
+  if (ops.length === 0) {
+    clearNodeBackup(node);
+    return { changed: false };
+  }
 
   // Load fonts to avoid errors when setting characters
   await safeLoadFontsForNode(node);
 
-  // Save backup original before replacing
-  saveNodeBackup(node, text, snapshot, collection.name);
+  // Save backup with replacements info
+  saveNodeBackup(node, text, snapshot, collection.name, replacements);
 
-  // Replace
-  node.characters = out;
+  // Apply replacements in reverse order to preserve indices
+  // ops contains original indices, which are valid if we work right-to-left
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const op = ops[i];
+    if (op.insertText.length > 0) {
+      // Insert new text, inheriting style from character at op.start
+      node.insertCharacters(op.start, op.insertText, "AFTER");
+    }
+    // Delete old text.
+    // If we inserted, old text is shifted by insertText.length.
+    const delStart = op.start + op.insertText.length;
+    node.deleteCharacters(delStart, delStart + op.removeLen);
+  }
+
   return { changed: true, snapshot };
 }
 
 /* Restore original placeholder text in node if pluginData exists */
 async function restorePlaceholdersInNode(node) {
   const backup = readNodeBackup(node);
-  if (!backup || !backup.original) return { restored: false };
-  // Load fonts before setting characters
+  if (!backup) return { restored: false };
+
+  // Load fonts
   await safeLoadFontsForNode(node);
-  node.characters = backup.original;
-  // Optionally keep backup to allow replace again on exit; we don't clear it now.
-  return { restored: true };
+
+  // If we have precise replacement tracking, use it to restore styles
+  if (backup.replacements && Array.isArray(backup.replacements)) {
+    // Sort descending by start index to apply changes right-to-left
+    const reps = [...backup.replacements].sort((a, b) => b.start - a.start);
+
+    for (const rep of reps) {
+      // rep.start is where the value starts in the current (replaced) text
+      // rep.len is the length of the value
+      // rep.originalText is the placeholder (e.g. "@keyword")
+
+      // Insert placeholder
+      node.insertCharacters(rep.start, rep.originalText, "AFTER");
+
+      // Delete value
+      // The value is now shifted by placeholder length
+      const delStart = rep.start + rep.originalText.length;
+      node.deleteCharacters(delStart, delStart + rep.len);
+    }
+    return { restored: true };
+  }
+
+  // Fallback for legacy backups (resets styling)
+  if (backup.original) {
+    node.characters = backup.original;
+    return { restored: true };
+  }
+
+  return { restored: false };
 }
 
 /* Load fonts used by a text node; safe wrapper */
