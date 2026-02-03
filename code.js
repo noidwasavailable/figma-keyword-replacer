@@ -114,6 +114,7 @@ async function replacePlaceholdersInNode(node, collectionName) {
   const replacements = [];
   const ops = [];
   let runningDelta = 0;
+  let hasIconReplacement = false;
 
   for (const mm of matches) {
     const variable = await findStringVariable(mm.key, collection);
@@ -131,12 +132,28 @@ async function replacePlaceholdersInNode(node, collectionName) {
 
     snapshot[mm.key] = resolvedValue;
 
+    // Check if this is an icon
+    const isIcon = mm.key.startsWith("icon/");
+    if (isIcon) hasIconReplacement = true;
+
+    // Capture original font for restoration
+    let originalFont = null;
+    try {
+      const f = node.getRangeFontName(mm.start, mm.start + 1);
+      if (f && f !== figma.mixed) {
+        originalFont = f;
+      }
+    } catch (e) {
+      /* ignore */
+    }
+
     // Track for restoration
     const finalStart = mm.start + runningDelta;
     replacements.push({
       start: finalStart,
       len: resolvedValue.length,
       originalText: mm.text,
+      originalFont,
     });
 
     // Track for replacement
@@ -144,6 +161,7 @@ async function replacePlaceholdersInNode(node, collectionName) {
       start: mm.start,
       removeLen: mm.len,
       insertText: resolvedValue,
+      isIcon,
     });
 
     runningDelta += resolvedValue.length - mm.len;
@@ -156,6 +174,19 @@ async function replacePlaceholdersInNode(node, collectionName) {
 
   // Load fonts to avoid errors when setting characters
   await safeLoadFontsForNode(node);
+  // Also load icon font if needed
+  let iconFontLoaded = false;
+  if (hasIconReplacement && iconFontFamily) {
+    try {
+      await figma.loadFontAsync({
+        family: iconFontFamily,
+        style: iconFontStyle || "Regular",
+      });
+      iconFontLoaded = true;
+    } catch (e) {
+      console.warn("Failed to load icon font", e);
+    }
+  }
 
   // Save backup with replacements info
   saveNodeBackup(node, text, snapshot, collection.name, replacements);
@@ -166,7 +197,14 @@ async function replacePlaceholdersInNode(node, collectionName) {
     const op = ops[i];
     if (op.insertText.length > 0) {
       // Insert new text, inheriting style from character at op.start
-      node.insertCharacters(op.start, op.insertText, "AFTER");
+      node.insertCharacters(op.start, op.insertText, "BEFORE");
+
+      if (op.isIcon && iconFontLoaded) {
+        node.setRangeFontName(op.start, op.start + op.insertText.length, {
+          family: iconFontFamily,
+          style: iconFontStyle || "Regular",
+        });
+      }
     }
     // Delete old text.
     // If we inserted, old text is shifted by insertText.length.
@@ -190,29 +228,69 @@ async function restorePlaceholdersInNode(node) {
     // Sort descending by start index to apply changes right-to-left
     const reps = [...backup.replacements].sort((a, b) => b.start - a.start);
 
+    // Load original fonts for restoration
+    const fontsToLoad = [];
+    for (const rep of reps) {
+      if (rep.originalFont) fontsToLoad.push(rep.originalFont);
+    }
+    await safeLoadFonts(fontsToLoad);
+
     for (const rep of reps) {
       // rep.start is where the value starts in the current (replaced) text
       // rep.len is the length of the value
       // rep.originalText is the placeholder (e.g. "@keyword")
 
       // Insert placeholder
-      node.insertCharacters(rep.start, rep.originalText, "AFTER");
+      node.insertCharacters(rep.start, rep.originalText, "BEFORE");
+
+      if (rep.originalFont) {
+        try {
+          node.setRangeFontName(
+            rep.start,
+            rep.start + rep.originalText.length,
+            rep.originalFont,
+          );
+        } catch (e) {
+          console.warn("Failed to restore font", e);
+        }
+      }
 
       // Delete value
       // The value is now shifted by placeholder length
       const delStart = rep.start + rep.originalText.length;
       node.deleteCharacters(delStart, delStart + rep.len);
     }
+    clearNodeBackup(node);
     return { restored: true };
   }
 
   // Fallback for legacy backups (resets styling)
   if (backup.original) {
     node.characters = backup.original;
+    clearNodeBackup(node);
     return { restored: true };
   }
 
   return { restored: false };
+}
+
+/* Helper: load a list of fonts safely */
+async function safeLoadFonts(fonts) {
+  try {
+    const unique = [];
+    const seen = new Set();
+    for (const f of fonts) {
+      const k = `${f.family}__${f.style}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        unique.push(f);
+      }
+    }
+    const promises = unique.map((f) => figma.loadFontAsync(f).catch(() => {}));
+    if (promises.length) await Promise.all(promises);
+  } catch (e) {
+    // ignore
+  }
 }
 
 /* Load fonts used by a text node; safe wrapper */
@@ -226,18 +304,7 @@ async function safeLoadFontsForNode(node) {
         fonts.push(font);
       }
     }
-    // dedupe
-    const unique = [];
-    const seen = new Set();
-    for (const f of fonts) {
-      const k = `${f.family}__${f.style}`;
-      if (!seen.has(k)) {
-        seen.add(k);
-        unique.push(f);
-      }
-    }
-    const promises = unique.map((f) => figma.loadFontAsync(f).catch(() => {}));
-    if (promises.length) await Promise.all(promises);
+    await safeLoadFonts(fonts);
   } catch (e) {
     // ignore
   }
@@ -274,6 +341,8 @@ function debounce(fn, wait) {
 /* STATE within plugin runtime */
 let featureEnabled = true;
 let chosenCollection = DEFAULT_COLLECTION_NAME;
+let iconFontFamily = "";
+let iconFontStyle = "Regular";
 
 // Load document-wide settings
 try {
@@ -281,6 +350,8 @@ try {
   if (savedRaw) {
     const saved = JSON.parse(savedRaw);
     if (saved.collection) chosenCollection = saved.collection;
+    if (saved.iconFontFamily) iconFontFamily = saved.iconFontFamily;
+    if (saved.iconFontStyle) iconFontStyle = saved.iconFontStyle;
   }
 } catch (e) {
   console.warn("Failed to load doc settings", e);
@@ -340,7 +411,7 @@ async function handleSelectionChange() {
 const debouncedSelectionHandler = debounce(handleSelectionChange, 200);
 
 /* UI messaging */
-figma.showUI(__html__, { width: 420, height: 320, themeColors: true });
+figma.showUI(__html__, { width: 420, height: 450, themeColors: true });
 
 figma.ui.onmessage = async (msg) => {
   if (msg.type === "init") {
@@ -351,19 +422,29 @@ figma.ui.onmessage = async (msg) => {
       collections: cols.map((c) => c.name),
       enabled: featureEnabled,
       collection: chosenCollection,
+      iconFontFamily,
+      iconFontStyle,
     });
     return;
   }
   if (msg.type === "set") {
     if (typeof msg.enabled === "boolean") featureEnabled = msg.enabled;
-    if (typeof msg.collection === "string") {
-      chosenCollection = msg.collection;
-      // Save document-wide
-      figma.root.setPluginData(
-        DOC_SETTINGS_KEY,
-        JSON.stringify({ collection: chosenCollection }),
-      );
-    }
+    if (typeof msg.collection === "string") chosenCollection = msg.collection;
+    if (typeof msg.iconFontFamily === "string")
+      iconFontFamily = msg.iconFontFamily;
+    if (typeof msg.iconFontStyle === "string")
+      iconFontStyle = msg.iconFontStyle;
+
+    // Save document-wide
+    figma.root.setPluginData(
+      DOC_SETTINGS_KEY,
+      JSON.stringify({
+        collection: chosenCollection,
+        iconFontFamily,
+        iconFontStyle,
+      }),
+    );
+
     figma.ui.postMessage({
       type: "status",
       text: `Feature ${featureEnabled ? "ON" : "OFF"}, collection: ${chosenCollection}`,
@@ -418,5 +499,7 @@ figma.on("selectionchange", () => {
     collections: cols.map((c) => c.name),
     enabled: featureEnabled,
     collection: chosenCollection,
+    iconFontFamily,
+    iconFontStyle,
   });
 })();
