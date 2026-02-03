@@ -21,8 +21,13 @@
         margin-top: 8px;
       }
       select,
+      input,
       button {
         margin-top: 6px;
+      }
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
       }
       .row {
         display: flex;
@@ -62,6 +67,24 @@
       <label
         >Variable collection:
         <select id="collection"></select>
+      </label>
+
+      <label
+        >Icon Font Family:
+        <input
+          id="icon-font-family"
+          type="text"
+          placeholder="e.g. Font Awesome 6 Free"
+        />
+      </label>
+      <label
+        >Icon Font Style:
+        <input
+          id="icon-font-style"
+          type="text"
+          placeholder="e.g. Solid"
+          value="Regular"
+        />
       </label>
 
       <div class="row">
@@ -112,6 +135,8 @@
 
     <script>
       const collectionEl = document.getElementById("collection");
+      const iconFontFamilyEl = document.getElementById("icon-font-family");
+      const iconFontStyleEl = document.getElementById("icon-font-style");
       const toggleEl = document.getElementById("toggle");
       const statusEl = document.getElementById("status");
       const runBtn = document.getElementById("run");
@@ -122,6 +147,12 @@
       const maximizeBtn = document.getElementById("maximize");
 
       const PLUGIN_COLLECTION_NAME = "KeywordReplacer (plugin)";
+
+      const PLUGIN_WINDOW_WIDTH = 420;
+      const PLUGIN_WINDOW_HEIGHT = 530;
+
+      const PLUGIN_WINDOW_WIDTH_MIN = 140;
+      const PLUGIN_WINDOW_HEIGHT_MIN = 60;
 
       parent.postMessage({ pluginMessage: { type: "init" } }, "*");
 
@@ -143,7 +174,20 @@
 
           toggleEl.checked = !!msg.enabled;
           if (msg.collection) collectionEl.value = msg.collection;
+          if (msg.iconFontFamily) iconFontFamilyEl.value = msg.iconFontFamily;
+          if (msg.iconFontStyle) iconFontStyleEl.value = msg.iconFontStyle;
           statusEl.textContent = `Feature ${toggleEl.checked ? "ON" : "OFF"} • collection: ${collectionEl.value}`;
+
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: "resize",
+                width: PLUGIN_WINDOW_WIDTH,
+                height: PLUGIN_WINDOW_HEIGHT,
+              },
+            },
+            "*",
+          );
         } else if (msg.type === "status") {
           statusEl.textContent = msg.text;
         } else if (msg.type === "run-result") {
@@ -159,6 +203,8 @@
               type: "set",
               enabled: toggleEl.checked,
               collection: collectionEl.value,
+              iconFontFamily: iconFontFamilyEl.value,
+              iconFontStyle: iconFontStyleEl.value,
             },
           },
           "*",
@@ -167,6 +213,8 @@
       }
 
       collectionEl.onchange = sendSettings;
+      iconFontFamilyEl.onchange = sendSettings;
+      iconFontStyleEl.onchange = sendSettings;
       toggleEl.onchange = sendSettings;
 
       runBtn.onclick = () => {
@@ -191,8 +239,8 @@
           {
             pluginMessage: {
               type: "resize",
-              width: 140,
-              height: 60,
+              width: PLUGIN_WINDOW_WIDTH_MIN,
+              height: PLUGIN_WINDOW_HEIGHT_MIN,
             },
           },
           "*",
@@ -209,8 +257,8 @@
           {
             pluginMessage: {
               type: "resize",
-              width: 420,
-              height: 320,
+              width: PLUGIN_WINDOW_WIDTH,
+              height: PLUGIN_WINDOW_HEIGHT,
             },
           },
           "*",
