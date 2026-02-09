@@ -162,6 +162,7 @@ async function replacePlaceholdersInNode(node, collectionName) {
       removeLen: mm.len,
       insertText: resolvedValue,
       isIcon,
+      originalFont, // Store original font for replacement
     });
 
     runningDelta += resolvedValue.length - mm.len;
@@ -199,11 +200,20 @@ async function replacePlaceholdersInNode(node, collectionName) {
       // Insert new text, inheriting style from character at op.start
       node.insertCharacters(op.start, op.insertText, "BEFORE");
 
+      const insertEnd = op.start + op.insertText.length;
+
       if (op.isIcon && iconFontLoaded) {
-        node.setRangeFontName(op.start, op.start + op.insertText.length, {
+        node.setRangeFontName(op.start, insertEnd, {
           family: iconFontFamily,
           style: iconFontStyle || "Regular",
         });
+      } else if (op.originalFont) {
+        // Explicitly apply the original font to the replaced text
+        try {
+          node.setRangeFontName(op.start, insertEnd, op.originalFont);
+        } catch (e) {
+          console.warn("Failed to set replaced font", e);
+        }
       }
     }
     // Delete old text.
