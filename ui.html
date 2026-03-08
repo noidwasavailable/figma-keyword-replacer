@@ -20,7 +20,7 @@
         line-height: 16px;
       }
       h3 {
-        font-size: 12px;
+        font-size: 18px;
         font-weight: 600;
         margin: 0 0 12px 0;
         padding: 0;
@@ -113,7 +113,7 @@
         display: none;
         align-items: center;
         justify-content: space-between;
-        height: 80%;
+        height: calc(100% - 16px);
         padding: 4px 8px;
       }
       body.minimized {
@@ -133,18 +133,25 @@
         left: 8px;
         width: calc(100% - 16px);
         background-color: var(--figma-color-bg);
-        border: 1px solid var(--figma-color-border);
-        border-radius: 4px;
+        border: 1px solid var(--figma-color-border-brand-strong);
+        border-radius: 8px;
         max-height: 150px;
         overflow-y: auto;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         z-index: 1000;
         box-sizing: border-box;
       }
+      /* Hide scrollbar for Chrome, Safari and Opera */
+      #autocomplete-panel::-webkit-scrollbar {
+        display: none;
+      }
+      /* Hide scrollbar for IE, Edge and Firefox */
+      #autocomplete-panel {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
+      }
       body.minimized #autocomplete-panel {
-        top: 36px;
-        border-top-left-radius: 0;
-        border-top-right-radius: 0;
+        top: 24px;
       }
       .ac-item {
         padding: 8px 12px;
