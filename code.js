@@ -577,6 +577,26 @@ figma.ui.onmessage = async (msg) => {
     figma.ui.postMessage({ type: "run-result", results });
     return;
   }
+  if (msg.type === "run-on-page") {
+    const nodes = gatherTextNodesFromSelectionOrPage(false);
+    const results = [];
+    for (const n of nodes) {
+      const r = await replacePlaceholdersInNode(n, chosenCollection);
+      results.push({ id: n.id, changed: r.changed });
+    }
+    figma.ui.postMessage({ type: "run-result", results });
+    return;
+  }
+  if (msg.type === "restore-on-page") {
+    const nodes = gatherTextNodesFromSelectionOrPage(false);
+    const results = [];
+    for (const n of nodes) {
+      const r = await restorePlaceholdersInNode(n);
+      results.push({ id: n.id, restored: r.restored });
+    }
+    figma.ui.postMessage({ type: "run-result", results });
+    return;
+  }
   if (msg.type === "autocomplete-apply") {
     try {
       const { text, wordStart, wordEnd, nodeId } = msg;

@@ -207,6 +207,10 @@
         <button id="restore">Restore on selection</button>
       </div>
       <div class="row">
+        <button id="run-page">Run on page</button>
+        <button id="restore-page">Restore on page</button>
+      </div>
+      <div class="row">
         <button id="minimize">Minimize</button>
         <button id="close" style="border-color: var(--figma-color-border-danger); color: var(--figma-color-text-danger);">Stop Plugin</button>
       </div>
@@ -250,6 +254,8 @@
       const statusEl = document.getElementById("status");
       const runBtn = document.getElementById("run");
       const restoreBtn = document.getElementById("restore");
+      const runPageBtn = document.getElementById("run-page");
+      const restorePageBtn = document.getElementById("restore-page");
       const minimizeBtn = document.getElementById("minimize");
       const closeBtn = document.getElementById("close");
       const maximizeBtn = document.getElementById("maximize");
@@ -257,8 +263,8 @@
 
       const PLUGIN_COLLECTION_NAME = "KeywordReplacer (plugin)";
 
-      const PLUGIN_WINDOW_WIDTH = 420;
-      const PLUGIN_WINDOW_HEIGHT = 550;
+      const PLUGIN_WINDOW_WIDTH = 400;
+      const PLUGIN_WINDOW_HEIGHT = 620;
 
       const PLUGIN_WINDOW_WIDTH_MIN = 210;
       const PLUGIN_WINDOW_HEIGHT_MIN = 80;
@@ -341,8 +347,7 @@
         } else if (msg.type === "status") {
           statusEl.textContent = msg.text;
         } else if (msg.type === "run-result") {
-          statusEl.textContent = `Done: ${msg.results.length} nodes processed. Check console for details.`;
-          console.log("run-result", msg.results);
+          statusEl.textContent = `Done: ${msg.results.length} nodes processed.`;
         }
       };
 
@@ -381,6 +386,22 @@
           "*",
         );
         statusEl.textContent = "Restoring placeholders on selection…";
+      };
+
+      runPageBtn.onclick = () => {
+        parent.postMessage(
+          { pluginMessage: { type: "run-on-page" } },
+          "*",
+        );
+        statusEl.textContent = "Running replace on page…";
+      };
+
+      restorePageBtn.onclick = () => {
+        parent.postMessage(
+          { pluginMessage: { type: "restore-on-page" } },
+          "*",
+        );
+        statusEl.textContent = "Restoring placeholders on page…";
       };
 
       minimizeBtn.onclick = () => {
