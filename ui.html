@@ -208,7 +208,6 @@
       </div>
       <div class="row">
         <button id="minimize">Minimize</button>
-        <button id="hide">Hide</button>
         <button id="close" style="border-color: var(--figma-color-border-danger); color: var(--figma-color-text-danger);">Stop Plugin</button>
       </div>
 
@@ -252,7 +251,6 @@
       const runBtn = document.getElementById("run");
       const restoreBtn = document.getElementById("restore");
       const minimizeBtn = document.getElementById("minimize");
-      const hideBtn = document.getElementById("hide");
       const closeBtn = document.getElementById("close");
       const maximizeBtn = document.getElementById("maximize");
       const autocompletePanel = document.getElementById("autocomplete-panel");
@@ -397,10 +395,6 @@
           },
           "*",
         );
-      };
-
-      hideBtn.onclick = () => {
-        parent.postMessage({ pluginMessage: { type: "hide" } }, "*");
       };
 
       maximizeBtn.onclick = () => {
