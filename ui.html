@@ -13,50 +13,160 @@
           Roboto,
           "Helvetica Neue",
           Arial;
-        padding: 8px;
-        background-color: #c6c6c6;
+        padding: 12px;
+        background-color: var(--figma-color-bg);
+        color: var(--figma-color-text);
+        font-size: 12px;
+        line-height: 16px;
+      }
+      h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 12px 0;
+        padding: 0;
       }
       label {
-        display: block;
-        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        margin-top: 12px;
+        font-weight: 600;
+      }
+      label > span {
+        margin-bottom: 6px;
+      }
+      .checkbox-label {
+        flex-direction: row;
+        align-items: center;
+        font-weight: 400;
+        gap: 6px;
+      }
+      input[type="checkbox"] {
+        margin: 0;
+        width: 14px;
+        height: 14px;
       }
       select,
-      input,
-      button {
-        margin-top: 6px;
-      }
       input[type="text"] {
         width: 100%;
         box-sizing: border-box;
+        border: 1px solid var(--figma-color-border);
+        background-color: var(--figma-color-bg);
+        color: var(--figma-color-text);
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-size: 12px;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.1s ease;
+      }
+      select:focus,
+      input[type="text"]:focus {
+        border-color: var(--figma-color-border-brand);
+      }
+      select:hover,
+      input[type="text"]:hover {
+        border-color: var(--figma-color-border-strong);
+      }
+      button {
+        background-color: var(--figma-color-bg);
+        border: 1px solid var(--figma-color-border-strong);
+        color: var(--figma-color-text);
+        border-radius: 6px;
+        padding: 6px 16px;
+        font-size: 12px;
+        font-family: inherit;
+        font-weight: 500;
+        cursor: pointer;
+        outline: none;
+        transition: all 0.1s ease;
+      }
+      button:hover {
+        background-color: var(--figma-color-bg-hover);
+      }
+      button:active {
+        background-color: var(--figma-color-bg-pressed);
       }
       .row {
         display: flex;
-        gap: 4px;
+        gap: 8px;
         align-items: center;
-        margin-top: 4px;
+        margin-top: 12px;
       }
       .status {
-        margin-top: 10px;
-        color: #333;
-        font-size: 13px;
+        margin-top: 16px;
+        padding: 8px;
+        border-radius: 4px;
+        background-color: var(--figma-color-bg-secondary);
+        color: var(--figma-color-text-secondary);
+        font-size: 11px;
+      }
+      p {
+        margin: 12px 0 0 0;
       }
       small {
-        color: #666;
+        color: var(--figma-color-text-tertiary);
+        font-size: 12px;
+        line-height: 1.4;
+        display: block;
       }
       #minimized-view {
         display: none;
         align-items: center;
         justify-content: space-between;
-        height: 100%;
+        height: calc(100% - 16px);
+        padding: 4px 8px;
       }
       body.minimized {
-        padding: 4px;
+        padding: 0;
       }
       body.minimized #main-view {
         display: none;
       }
       body.minimized #minimized-view {
         display: flex;
+        align-items: center;
+      }
+      #autocomplete-panel {
+        display: none;
+        position: absolute;
+        top: 60px;
+        left: 8px;
+        width: calc(100% - 16px);
+        background-color: var(--figma-color-bg);
+        border: 1px solid var(--figma-color-border-brand-strong);
+        border-radius: 8px;
+        max-height: 150px;
+        overflow-y: auto;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        z-index: 1000;
+        box-sizing: border-box;
+      }
+      /* Hide scrollbar for Chrome, Safari and Opera */
+      #autocomplete-panel::-webkit-scrollbar {
+        display: none;
+      }
+      /* Hide scrollbar for IE, Edge and Firefox */
+      #autocomplete-panel {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
+      }
+      body.minimized #autocomplete-panel {
+        top: 24px;
+      }
+      .ac-item {
+        padding: 8px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--figma-color-border);
+        color: var(--figma-color-text);
+        transition: background-color 0.1s;
+      }
+      .ac-item:last-child {
+        border-bottom: none;
+      }
+      .ac-item:hover {
+        background-color: var(--figma-color-bg-hover);
+        color: var(--figma-color-text-brand);
       }
     </style>
   </head>
@@ -64,21 +174,21 @@
     <div id="main-view">
       <h3>Keyword Replacer</h3>
 
-      <label
-        >Variable collection:
+      <label>
+        <span>Variable collection:</span>
         <select id="collection"></select>
       </label>
 
-      <label
-        >Icon Font Family:
+      <label>
+        <span>Icon Font Family:</span>
         <input
           id="icon-font-family"
           type="text"
           placeholder="e.g. Font Awesome 6 Free"
         />
       </label>
-      <label
-        >Icon Font Style:
+      <label>
+        <span>Icon Font Style:</span>
         <input
           id="icon-font-style"
           type="text"
@@ -87,21 +197,18 @@
         />
       </label>
 
-      <div class="row">
-        <label
-          ><input id="toggle" type="checkbox" checked /> Enable automatic
-          replace/restore</label
-        >
-      </div>
+      <label class="checkbox-label" style="flex-direction: row; margin-top: 16px;">
+        <input id="toggle" type="checkbox" checked />
+        <span>Enable automatic replace/restore</span>
+      </label>
 
-      <div class="row">
-        <button id="run">Run replace on selection</button>
-        <button id="restore">Restore placeholders on selection</button>
+      <div class="row" style="margin-top: 16px;">
+        <button id="run">Run on selection</button>
+        <button id="restore">Restore on selection</button>
       </div>
       <div class="row">
         <button id="minimize">Minimize</button>
-        <button id="hide">Hide</button>
-        <button id="close">Stop Plugin</button>
+        <button id="close" style="border-color: var(--figma-color-border-danger); color: var(--figma-color-text-danger);">Stop Plugin</button>
       </div>
 
       <div class="status" id="status">Loading collections…</div>
@@ -122,16 +229,18 @@
       </p>
 
       <p>
-        <small>v0.4</small>
+        <small>v0.5</small>
       </p>
     </div>
 
     <div id="minimized-view">
-      <span style="font-size: 11px; color: #333; font-weight: 600"
+      <span style="font-size: 12px; color: var(--figma-color-text); font-weight: 600"
         >✅ Active</span
       >
       <button id="maximize">Expand</button>
     </div>
+
+    <div id="autocomplete-panel"></div>
 
     <script>
       const collectionEl = document.getElementById("collection");
@@ -142,24 +251,30 @@
       const runBtn = document.getElementById("run");
       const restoreBtn = document.getElementById("restore");
       const minimizeBtn = document.getElementById("minimize");
-      const hideBtn = document.getElementById("hide");
       const closeBtn = document.getElementById("close");
       const maximizeBtn = document.getElementById("maximize");
+      const autocompletePanel = document.getElementById("autocomplete-panel");
 
       const PLUGIN_COLLECTION_NAME = "KeywordReplacer (plugin)";
 
       const PLUGIN_WINDOW_WIDTH = 420;
-      const PLUGIN_WINDOW_HEIGHT = 530;
+      const PLUGIN_WINDOW_HEIGHT = 550;
 
-      const PLUGIN_WINDOW_WIDTH_MIN = 140;
-      const PLUGIN_WINDOW_HEIGHT_MIN = 60;
+      const PLUGIN_WINDOW_WIDTH_MIN = 210;
+      const PLUGIN_WINDOW_HEIGHT_MIN = 80;
 
       parent.postMessage({ pluginMessage: { type: "init" } }, "*");
+
+      let allVariablesForAutocomplete = [];
+      let currentAutocompleteTarget = null;
 
       onmessage = (event) => {
         const msg = event.data.pluginMessage;
         if (!msg) return;
         if (msg.type === "init") {
+          if (msg.autocompleteVars) {
+            allVariablesForAutocomplete = msg.autocompleteVars;
+          }
           collectionEl.innerHTML = "";
           msg.collections.forEach((name) => {
             const opt = document.createElement("option");
@@ -188,6 +303,41 @@
             },
             "*",
           );
+        } else if (msg.type === "autocomplete-query") {
+          const q = (msg.query || "").toLowerCase();
+          const matches = allVariablesForAutocomplete.filter(v => v.toLowerCase().includes(q));
+          
+          if (matches.length > 0) {
+            autocompletePanel.innerHTML = "";
+            autocompletePanel.style.display = "block";
+            currentAutocompleteTarget = { wordStart: msg.wordStart, wordEnd: msg.wordEnd, nodeId: msg.nodeId };
+
+            if (document.body.classList.contains("minimized")) {
+              parent.postMessage({ pluginMessage: { type: "resize", width: Math.max(PLUGIN_WINDOW_WIDTH_MIN, 250), height: 200 } }, "*");
+            }
+
+            matches.forEach(m => {
+                const div = document.createElement("div");
+                div.className = "ac-item";
+                div.textContent = "@" + m;
+                div.onclick = () => {
+                    parent.postMessage({ pluginMessage: { type: "autocomplete-apply", text: "@" + m, ...currentAutocompleteTarget } }, "*");
+                };
+                autocompletePanel.appendChild(div);
+            });
+          } else {
+            autocompletePanel.style.display = "none";
+            currentAutocompleteTarget = null;
+            if (document.body.classList.contains("minimized")) {
+              parent.postMessage({ pluginMessage: { type: "resize", width: PLUGIN_WINDOW_WIDTH_MIN, height: PLUGIN_WINDOW_HEIGHT_MIN } }, "*");
+            }
+          }
+        } else if (msg.type === "autocomplete-close") {
+          autocompletePanel.style.display = "none";
+          currentAutocompleteTarget = null;
+          if (document.body.classList.contains("minimized")) {
+            parent.postMessage({ pluginMessage: { type: "resize", width: PLUGIN_WINDOW_WIDTH_MIN, height: PLUGIN_WINDOW_HEIGHT_MIN } }, "*");
+          }
         } else if (msg.type === "status") {
           statusEl.textContent = msg.text;
         } else if (msg.type === "run-result") {
@@ -245,10 +395,6 @@
           },
           "*",
         );
-      };
-
-      hideBtn.onclick = () => {
-        parent.postMessage({ pluginMessage: { type: "hide" } }, "*");
       };
 
       maximizeBtn.onclick = () => {

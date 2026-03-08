@@ -353,6 +353,7 @@ let featureEnabled = true;
 let chosenCollection = DEFAULT_COLLECTION_NAME;
 let iconFontFamily = "";
 let iconFontStyle = "Regular";
+let activeNodeOriginalText = "";
 
 // Load document-wide settings
 try {
@@ -414,30 +415,120 @@ async function handleSelectionChange() {
     }
   }
 
+  if (newSelectedNode) {
+    activeNodeOriginalText = newSelectedNode.characters;
+  } else {
+    activeNodeOriginalText = "";
+    figma.ui.postMessage({ type: "autocomplete-close" });
+  }
+
   lastSelectedNodeId = newId;
+}
+
+figma.loadAllPagesAsync().then(() => {
+  figma.on("documentchange", async (event) => {
+    if (!featureEnabled || !lastSelectedNodeId) return;
+
+    for (const change of event.documentChanges) {
+      if (change.type === "PROPERTY_CHANGE" && change.id === lastSelectedNodeId && change.properties.includes("characters")) {
+        const node = await figma.getNodeByIdAsync(lastSelectedNodeId);
+        if (!node || node.type !== "TEXT") continue;
+
+        handleTextEditForAutocomplete(node, activeNodeOriginalText, node.characters);
+        activeNodeOriginalText = node.characters;
+      }
+    }
+  });
+});
+
+function handleTextEditForAutocomplete(node, oldText, newText) {
+  if (newText === oldText) return;
+
+  let startDiff = 0;
+  while (startDiff < oldText.length && startDiff < newText.length && oldText[startDiff] === newText[startDiff]) {
+    startDiff++;
+  }
+
+  let oldEndDiff = oldText.length - 1;
+  let newEndDiff = newText.length - 1;
+  while (oldEndDiff >= startDiff && newEndDiff >= startDiff && oldText[oldEndDiff] === newText[newEndDiff]) {
+    oldEndDiff--;
+    newEndDiff--;
+  }
+
+  const cursorApprox = newEndDiff + 1;
+
+  let wordStart = cursorApprox;
+  while (wordStart > 0) {
+    const prevChar = newText[wordStart - 1];
+    if (/\s/.test(prevChar)) break;
+    if (prevChar === '@') {
+      wordStart--;
+      break;
+    }
+    wordStart--;
+  }
+
+  let wordEnd = cursorApprox;
+  while (wordEnd < newText.length) {
+    const char = newText[wordEnd];
+    if (/\s/.test(char)) break;
+    if (char === '@' && wordEnd > wordStart) break;
+    wordEnd++;
+  }
+
+  const word = newText.substring(wordStart, wordEnd);
+
+  if (word.startsWith("@") && word.length > 0) {
+    figma.ui.postMessage({
+      type: "autocomplete-query",
+      query: word.substring(1),
+      wordStart: wordStart,
+      wordEnd: wordEnd,
+      nodeId: node.id
+    });
+  } else {
+    figma.ui.postMessage({ type: "autocomplete-close" });
+  }
 }
 
 /* Debounced selection handler to avoid flapping */
 const debouncedSelectionHandler = debounce(handleSelectionChange, 200);
 
 /* UI messaging */
-figma.showUI(__html__, { width: 420, height: 450, themeColors: true });
+figma.showUI(__html__, { width: 420, height: 530, themeColors: true });
+
+async function sendInitStateToUI() {
+  const cols = await figma.variables.getLocalVariableCollectionsAsync();
+  let autocompleteVars = [];
+  try {
+    const chosenColObj = cols.find(c => c.name === chosenCollection) || cols[0];
+    if (chosenColObj) {
+      const vars = await figma.variables.getLocalVariablesAsync("STRING");
+      autocompleteVars = vars.filter(v => v.variableCollectionId === chosenColObj.id).map(v => v.name);
+    }
+  } catch (e) {
+    console.warn("Failed fetching autocomplete vars", e);
+  }
+
+  figma.ui.postMessage({
+    type: "init",
+    collections: cols.map((c) => c.name),
+    enabled: featureEnabled,
+    collection: chosenCollection,
+    iconFontFamily,
+    iconFontStyle,
+    autocompleteVars,
+  });
+}
 
 figma.ui.onmessage = async (msg) => {
   if (msg.type === "init") {
-    // Send initial collections and status
-    const cols = await figma.variables.getLocalVariableCollectionsAsync();
-    figma.ui.postMessage({
-      type: "init",
-      collections: cols.map((c) => c.name),
-      enabled: featureEnabled,
-      collection: chosenCollection,
-      iconFontFamily,
-      iconFontStyle,
-    });
+    await sendInitStateToUI();
     return;
   }
   if (msg.type === "set") {
+    const previousCollection = chosenCollection;
     if (typeof msg.enabled === "boolean") featureEnabled = msg.enabled;
     if (typeof msg.collection === "string") chosenCollection = msg.collection;
     if (typeof msg.iconFontFamily === "string")
@@ -459,6 +550,10 @@ figma.ui.onmessage = async (msg) => {
       type: "status",
       text: `Feature ${featureEnabled ? "ON" : "OFF"}, collection: ${chosenCollection}`,
     });
+
+    if (previousCollection !== chosenCollection) {
+      await sendInitStateToUI();
+    }
     return;
   }
   if (msg.type === "run-on-selection") {
@@ -482,6 +577,24 @@ figma.ui.onmessage = async (msg) => {
     figma.ui.postMessage({ type: "run-result", results });
     return;
   }
+  if (msg.type === "autocomplete-apply") {
+    try {
+      const { text, wordStart, wordEnd, nodeId } = msg;
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (node && node.type === "TEXT") {
+        await safeLoadFontsForNode(node);
+        node.deleteCharacters(wordStart, wordEnd);
+        node.insertCharacters(wordStart, text, "BEFORE");
+
+        activeNodeOriginalText = node.characters;
+
+        figma.ui.postMessage({ type: "autocomplete-close" });
+      }
+    } catch (e) {
+      console.warn("Failed to apply autocomplete", e);
+    }
+    return;
+  }
   if (msg.type === "resize") {
     figma.ui.resize(msg.width, msg.height);
     return;
@@ -503,13 +616,5 @@ figma.on("selectionchange", () => {
 
 /* When UI opens, send initial data */
 (async () => {
-  const cols = await figma.variables.getLocalVariableCollectionsAsync();
-  figma.ui.postMessage({
-    type: "init",
-    collections: cols.map((c) => c.name),
-    enabled: featureEnabled,
-    collection: chosenCollection,
-    iconFontFamily,
-    iconFontStyle,
-  });
+  await sendInitStateToUI();
 })();
