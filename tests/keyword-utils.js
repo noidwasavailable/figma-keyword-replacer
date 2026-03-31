@@ -65,6 +65,84 @@ export function extractPlaceholders(text) {
 }
 
 /**
+ * Validate whether a stored backup can be safely restored against current text.
+ * Mirrors the plugin-side safety checks in a pure, testable form.
+ */
+export function isBackupApplicable(currentText, backup) {
+  const text = String(currentText ?? "");
+  if (
+    !backup ||
+    !Array.isArray(backup.replacements) ||
+    backup.replacements.length === 0
+  ) {
+    return false;
+  }
+
+  const snapshot = backup.snapshot || {};
+
+  for (const rep of backup.replacements) {
+    if (!rep || typeof rep.start !== "number" || typeof rep.len !== "number") {
+      return false;
+    }
+
+    if (rep.start < 0 || rep.len < 0 || rep.start + rep.len > text.length) {
+      return false;
+    }
+
+    const originalText = String(rep.originalText || "");
+    if (!originalText.startsWith("@")) {
+      return false;
+    }
+
+    const key = originalText.slice(1);
+    const expectedValue = snapshot[key];
+    if (typeof expectedValue !== "string") {
+      return false;
+    }
+
+    const actualValue = text.slice(rep.start, rep.start + rep.len);
+    if (actualValue !== expectedValue) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Explicit helper for tests that assert stale backups are rejected.
+ */
+export function shouldRejectStaleBackup(currentText, backup) {
+  return !isBackupApplicable(currentText, backup);
+}
+
+/**
+ * Pure restore simulation used by tests.
+ * Mirrors the plugin's right-to-left restore behavior while remaining Figma-independent.
+ *
+ * Returns:
+ * - { restored: false, text: currentText } when backup is stale/invalid
+ * - { restored: true, text: restoredText } when restore can be safely applied
+ */
+export function restoreFromBackupSimulation(currentText, backup) {
+  const text = String(currentText ?? "");
+  if (!isBackupApplicable(text, backup)) {
+    return { restored: false, text };
+  }
+
+  const reps = [...backup.replacements].sort((a, b) => b.start - a.start);
+  let out = text;
+
+  for (const rep of reps) {
+    const before = out.slice(0, rep.start);
+    const after = out.slice(rep.start + rep.len);
+    out = before + rep.originalText + after;
+  }
+
+  return { restored: true, text: out };
+}
+
+/**
  * Utility for tests:
  * Find the first matching variable name from a list, or null.
  */

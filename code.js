@@ -1,4 +1,4 @@
-// Placeholder Replace & Restore - code.js
+// Keyword Replacer - code.js
 // Searches text nodes for @keyword, replaces with STRING variable values on edit exit,
 // and restores @keyword when node is selected (edit start). Uses node pluginData to store backups.
 
@@ -7,6 +7,7 @@ const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)+\b/g;
 const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON: { original: "...", vars: {key: value}, collection: "name", replacements: [...] }
 const DOC_SETTINGS_KEY = "prr:settings";
 const DEFAULT_COLLECTION_NAME = "Keywords";
+const DEBUG_LOGS = false;
 
 /* Utility: safe get/create collection */
 async function getOrCreateCollection(name) {
@@ -92,6 +93,48 @@ function clearNodeBackup(node) {
   } catch (e) {
     console.warn("clear plugin data failed", e);
   }
+}
+
+function debugLog(...args) {
+  if (!DEBUG_LOGS) return;
+  console.log("[PRR]", ...args);
+}
+
+function isBackupApplicable(node, backup) {
+  if (!backup || !Array.isArray(backup.replacements) || backup.replacements.length === 0) {
+    return false;
+  }
+
+  const currentText = node.characters;
+  const snapshot = backup.snapshot || {};
+
+  for (const rep of backup.replacements) {
+    if (!rep || typeof rep.start !== "number" || typeof rep.len !== "number") {
+      return false;
+    }
+
+    if (rep.start < 0 || rep.len < 0 || rep.start + rep.len > currentText.length) {
+      return false;
+    }
+
+    const originalText = String(rep.originalText || "");
+    if (!originalText.startsWith("@")) {
+      return false;
+    }
+
+    const key = originalText.slice(1);
+    const expectedValue = snapshot[key];
+    if (typeof expectedValue !== "string") {
+      return false;
+    }
+
+    const actualValue = currentText.slice(rep.start, rep.start + rep.len);
+    if (actualValue !== expectedValue) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /* Replace placeholders in a TextNode with variable values, save backup */
@@ -238,6 +281,22 @@ async function replacePlaceholdersInNode(node, collectionName) {
 async function restorePlaceholdersInNode(node) {
   const backup = readNodeBackup(node);
   if (!backup) return { restored: false };
+
+  const applicable = isBackupApplicable(node, backup);
+  if (!applicable) {
+    debugLog("Skipping restore due to stale/invalid backup", {
+      nodeId: node.id,
+      nodeText: node.characters,
+      backup,
+    });
+    clearNodeBackup(node);
+    return { restored: false };
+  }
+
+  debugLog("Restoring placeholders from backup", {
+    nodeId: node.id,
+    replacementCount: backup.replacements.length,
+  });
 
   // Load fonts
   await safeLoadFontsForNode(node);
@@ -396,14 +455,25 @@ async function handleSelectionChange() {
     sel.length === 1 && sel[0].type === "TEXT" ? sel[0] : null;
   const newId = newSelectedNode ? newSelectedNode.id : null;
 
+  debugLog("selectionchange", {
+    lastSelectedNodeId,
+    newId,
+    selectionCount: sel.length,
+  });
+
   // If we had a last selected text node that is no longer selected, treat that as edit-finish
   if (lastSelectedNodeId && lastSelectedNodeId !== newId) {
     try {
       processing = true;
       const prevNode = await figma.getNodeByIdAsync(lastSelectedNodeId);
       if (prevNode && prevNode.type === "TEXT") {
+        debugLog("Replacing placeholders on deselected node", {
+          nodeId: prevNode.id,
+          textBefore: prevNode.characters,
+        });
         // Replace placeholders -> values
-        await replacePlaceholdersInNode(prevNode, chosenCollection);
+        const result = await replacePlaceholdersInNode(prevNode, chosenCollection);
+        debugLog("Replace result", { nodeId: prevNode.id, result });
       }
     } catch (e) {
       console.warn("Error processing previous node on selection change", e);
@@ -416,7 +486,12 @@ async function handleSelectionChange() {
   if (newSelectedNode && newId !== lastSelectedNodeId) {
     try {
       processing = true;
-      await restorePlaceholdersInNode(newSelectedNode);
+      debugLog("Attempting restore on newly selected node", {
+        nodeId: newSelectedNode.id,
+        textBefore: newSelectedNode.characters,
+      });
+      const result = await restorePlaceholdersInNode(newSelectedNode);
+      debugLog("Restore result", { nodeId: newSelectedNode.id, result });
     } catch (e) {
       console.warn("Error restoring node on selection change", e);
     } finally {
@@ -442,6 +517,12 @@ figma.loadAllPagesAsync().then(() => {
       if (change.type === "PROPERTY_CHANGE" && change.id === lastSelectedNodeId && change.properties.includes("characters")) {
         const node = await figma.getNodeByIdAsync(lastSelectedNodeId);
         if (!node || node.type !== "TEXT") continue;
+
+        const hadBackup = Boolean(readNodeBackup(node));
+        if (hadBackup) {
+          clearNodeBackup(node);
+          debugLog("Cleared stale backup after direct text edit", { nodeId: node.id });
+        }
 
         handleTextEditForAutocomplete(node, activeNodeOriginalText, node.characters);
         activeNodeOriginalText = node.characters;
