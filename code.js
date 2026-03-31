@@ -3,7 +3,7 @@
 // and restores @keyword when node is selected (edit start). Uses node pluginData to store backups.
 
 /* CONFIG */
-const PLACEHOLDER_REGEX = /@([a-zA-Z0-9_\-\/]+(?:\.[a-zA-Z0-9_\-\/]+)*)/g;
+const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)+\b/g;
 const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON: { original: "...", vars: {key: value}, collection: "name", replacements: [...] }
 const DOC_SETTINGS_KEY = "prr:settings";
 const DEFAULT_COLLECTION_NAME = "Keywords";
@@ -20,15 +20,17 @@ async function getOrCreateCollection(name) {
 }
 
 /* Utility: find STRING variable inside a collection (or any collection) */
-async function findStringVariable(name, collection) {
-  const vars = await figma.variables.getLocalVariablesAsync("STRING");
-  // Try to find in the target collection first
-  let existing = vars.find(
-    (v) => v.name === name && v.variableCollectionId === collection.id,
+async function findStringVariable(collection, key) {
+  const vars = await figma.variables.getLocalVariablesAsync('STRING');
+  const normalize = (s) => String(s || "").trim().toLowerCase().replace(/^@/, "");
+  const normalizedKey = normalize(key);
+  return (
+    vars.find(
+      (v) =>
+        v.variableCollectionId === collection.id &&
+        normalize(v.name) === normalizedKey,
+    ) || null
   );
-  if (existing) return existing;
-
-  return null;
 }
 
 /* Resolve variable value (string) for a consumer node if possible */
@@ -98,7 +100,13 @@ async function replacePlaceholdersInNode(node, collectionName) {
   let m;
   const matches = [];
   while ((m = PLACEHOLDER_REGEX.exec(text)) !== null) {
-    matches.push({ key: m[1], start: m.index, len: m[0].length, text: m[0] });
+    const token = m[0];
+    matches.push({
+      key: token.slice(1),
+      start: m.index,
+      len: token.length,
+      text: token,
+    });
   }
   if (!matches.length) {
     // Clear backup if no placeholders are found to prevent restoring stale data
@@ -117,7 +125,8 @@ async function replacePlaceholdersInNode(node, collectionName) {
   let hasIconReplacement = false;
 
   for (const mm of matches) {
-    const variable = await findStringVariable(mm.key, collection);
+    const variable = await findStringVariable(collection, mm.key);
+    if (!variable) continue;
     let resolvedValue = null;
 
     if (variable) {
