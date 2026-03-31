@@ -1,0 +1,11 @@
+{
+  "name": "figma-keyword-replacer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:keyword": "bun test ./tests/keyword-utils.test.js"
+  }
+}
