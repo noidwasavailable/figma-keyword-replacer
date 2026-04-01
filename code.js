@@ -3,7 +3,7 @@
 // and restores @keyword when node is selected (edit start). Uses node pluginData to store backups.
 
 /* CONFIG */
-const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)+\b/g;
+const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)*\b/g;
 const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON backup payload (versioned)
 const DOC_SETTINGS_KEY = "prr:settings";
 const DEFAULT_COLLECTION_NAME = "Keywords";
