@@ -6,14 +6,17 @@
 /**
  * Matches inline placeholders such as:
  * - "@icon/defense"
- * - "1@icon/defense"
- * - "HP:@icon/defense"
+ * - "@keyword1@keyword2"
+ * - "@keyword1:@keyword2"
+ * - "When I draw:@keyword1"
  *
- * Requires:
+ * Rules:
  * - starts with "@"
- * - at least one "/" segment after the first token
+ * - allows simple keys (e.g. "@keyword1")
+ * - also allows slash-segment keys (e.g. "@icon/defense")
  */
-export const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)+\b/g;
+export const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)*\b/g;
+export const BACKUP_SCHEMA_VERSION = 2;
 
 /**
  * Normalize a placeholder or variable name for exact comparison.
@@ -65,6 +68,63 @@ export function extractPlaceholders(text) {
 }
 
 /**
+ * Resolve placeholders in a string using a resolver function or lookup object.
+ *
+ * - `resolveValue` can be:
+ *   - function: (key, match) => value | null | undefined
+ *   - object map: { [key]: value }
+ *
+ * Replacements are applied right-to-left so adjacent tokens like
+ * "@keyword1@keyword2" are handled safely.
+ */
+export function resolvePlaceholdersInText(text, resolveValue) {
+  const input = String(text ?? "");
+  const matches = extractPlaceholders(input);
+  if (matches.length === 0) {
+    return { changed: false, text: input, replacements: [] };
+  }
+
+  const resolver =
+    typeof resolveValue === "function"
+      ? resolveValue
+      : (key) => {
+          if (
+            resolveValue &&
+            Object.prototype.hasOwnProperty.call(resolveValue, key)
+          ) {
+            return resolveValue[key];
+          }
+          return null;
+        };
+
+  let out = input;
+  let changed = false;
+  const replacements = [];
+
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const match = matches[i];
+    const resolved = resolver(match.key, match);
+
+    if (resolved === null || resolved === undefined) continue;
+
+    const value = String(resolved);
+    out =
+      out.slice(0, match.start) + value + out.slice(match.start + match.len);
+    changed = true;
+
+    replacements.unshift({
+      key: match.key,
+      start: match.start,
+      len: match.len,
+      text: match.text,
+      value,
+    });
+  }
+
+  return { changed, text: out, replacements };
+}
+
+/**
  * Validate whether a stored backup can be safely restored against current text.
  * Mirrors the plugin-side safety checks in a pure, testable form.
  */
@@ -74,6 +134,14 @@ export function isBackupApplicable(currentText, backup) {
     !backup ||
     !Array.isArray(backup.replacements) ||
     backup.replacements.length === 0
+  ) {
+    return false;
+  }
+
+  if (
+    backup.schemaVersion === BACKUP_SCHEMA_VERSION &&
+    backup.replacedTextHash &&
+    backup.replacedTextHash !== hashStringFNV1a(text)
   ) {
     return false;
   }
@@ -95,7 +163,9 @@ export function isBackupApplicable(currentText, backup) {
     }
 
     const key = originalText.slice(1);
-    const expectedValue = snapshot[key];
+    const expectedValue =
+      typeof rep.valueAtSave === "string" ? rep.valueAtSave : snapshot[key];
+
     if (typeof expectedValue !== "string") {
       return false;
     }
@@ -117,6 +187,87 @@ export function shouldRejectStaleBackup(currentText, backup) {
 }
 
 /**
+ * Stable string hash (FNV-1a) used by v2 backups.
+ */
+export function hashStringFNV1a(value) {
+  let h = 0x811c9dc5;
+  const input = String(value ?? "");
+
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Deterministic icon-mapping hash from { key, value, variableId } entries.
+ */
+export function computeIconMappingHashFromEntries(entries) {
+  const normalized = (entries || [])
+    .filter(Boolean)
+    .map((entry) => {
+      const key = normalizeVariableName(entry.key);
+      const value = String(entry.value ?? "");
+      const variableId = String(entry.variableId ?? "");
+      return `${key}|${value}|${variableId}`;
+    })
+    .sort();
+
+  return hashStringFNV1a(normalized.join("||"));
+}
+
+/**
+ * One-way migration helper for legacy backup payloads used by tests.
+ * Converts v1-style replacements/snapshot into v2-compatible fields.
+ */
+export function migrateBackupPayloadForTests(currentText, backup) {
+  const text = String(currentText ?? "");
+  if (!backup || typeof backup !== "object") return null;
+  if (backup.schemaVersion === BACKUP_SCHEMA_VERSION) return backup;
+
+  const replacements = Array.isArray(backup.replacements)
+    ? backup.replacements
+    : [];
+  if (replacements.length === 0) return backup;
+
+  const snapshot = backup.snapshot || {};
+  const migratedReplacements = replacements.map((rep) => {
+    const originalText = String(rep.originalText || "");
+    const tokenKey = normalizeVariableName(
+      originalText.startsWith("@") ? originalText.slice(1) : rep.tokenKey,
+    );
+    const valueAtSave =
+      typeof snapshot[tokenKey] === "string" ? snapshot[tokenKey] : "";
+
+    return {
+      ...rep,
+      tokenKey,
+      valueAtSave,
+      variableId: rep.variableId || "",
+    };
+  });
+
+  const iconEntries = migratedReplacements
+    .filter((rep) => normalizeVariableName(rep.tokenKey).startsWith("icon/"))
+    .map((rep) => ({
+      key: rep.tokenKey,
+      value: rep.valueAtSave,
+      variableId: rep.variableId || "",
+    }));
+
+  return {
+    ...backup,
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    replacements: migratedReplacements,
+    mappingHash:
+      backup.mappingHash || computeIconMappingHashFromEntries(iconEntries),
+    replacedTextHash: backup.replacedTextHash || hashStringFNV1a(text),
+  };
+}
+
+/**
  * Pure restore simulation used by tests.
  * Mirrors the plugin's right-to-left restore behavior while remaining Figma-independent.
  *
@@ -126,11 +277,13 @@ export function shouldRejectStaleBackup(currentText, backup) {
  */
 export function restoreFromBackupSimulation(currentText, backup) {
   const text = String(currentText ?? "");
-  if (!isBackupApplicable(text, backup)) {
+  const migrated = migrateBackupPayloadForTests(text, backup);
+
+  if (!isBackupApplicable(text, migrated)) {
     return { restored: false, text };
   }
 
-  const reps = [...backup.replacements].sort((a, b) => b.start - a.start);
+  const reps = [...migrated.replacements].sort((a, b) => b.start - a.start);
   let out = text;
 
   for (const rep of reps) {

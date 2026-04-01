@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   PLACEHOLDER_REGEX,
+  BACKUP_SCHEMA_VERSION,
   extractPlaceholders,
   normalizeVariableName,
   isVariableNameMatch,
@@ -8,6 +9,10 @@ import {
   isBackupApplicable,
   shouldRejectStaleBackup,
   restoreFromBackupSimulation,
+  hashStringFNV1a,
+  computeIconMappingHashFromEntries,
+  migrateBackupPayloadForTests,
+  resolvePlaceholdersInText,
 } from "./keyword-utils.js";
 
 describe("PLACEHOLDER_REGEX / extractPlaceholders", () => {
@@ -55,11 +60,13 @@ describe("PLACEHOLDER_REGEX / extractPlaceholders", () => {
     expect(matches).toHaveLength(0);
   });
 
-  test("does not match @character without slash segment", () => {
+  test("matches simple @keyword without slash segment", () => {
     const input = "This is @character";
     const matches = extractPlaceholders(input);
 
-    expect(matches).toHaveLength(0);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].key).toBe("character");
+    expect(matches[0].text).toBe("@character");
   });
 
   test("regex state is reset between calls", () => {
@@ -77,6 +84,44 @@ describe("PLACEHOLDER_REGEX / extractPlaceholders", () => {
     const raw = [...input.matchAll(PLACEHOLDER_REGEX)].map((m) => m[0]);
 
     expect(raw).toEqual(["@icon/defense"]);
+  });
+});
+
+describe("pattern matching and replacement with adjacent/punctuated placeholders", () => {
+  test("resolves adjacent placeholders without whitespace: @keyword1@keyword2", () => {
+    const input = "@keyword1@keyword2";
+    const result = resolvePlaceholdersInText(input, {
+      keyword1: "value1",
+      keyword2: "value2",
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("value1value2");
+    expect(result.replacements.map((r) => r.key)).toEqual([
+      "keyword1",
+      "keyword2",
+    ]);
+  });
+
+  test("resolves placeholders delimited by punctuation: @keyword1:@keyword2", () => {
+    const input = "@keyword1:@keyword2";
+    const result = resolvePlaceholdersInText(input, {
+      keyword1: "value1",
+      keyword2: "value2",
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("value1:value2");
+  });
+
+  test('resolves placeholder after prefix punctuation: "When I draw:@keyword1"', () => {
+    const input = "When I draw:@keyword1";
+    const result = resolvePlaceholdersInText(input, {
+      keyword1: "value1",
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("When I draw:value1");
   });
 });
 
@@ -242,6 +287,98 @@ describe("backup restore lifecycle simulation", () => {
     const result = restoreFromBackupSimulation(currentText, backup);
     expect(result.restored).toBe(true);
     expect(result.text).toBe("Use @icon/defense then @icon/attack now.");
+  });
+});
+
+describe("v2 backup migration and integrity checks", () => {
+  test("migrates legacy backup to schema v2 with derived replacement fields", () => {
+    const currentText = "Target ◆ now.";
+    const legacy = {
+      snapshot: { "icon/defense": "◆" },
+      replacements: [
+        {
+          start: "Target ".length,
+          len: 1,
+          originalText: "@icon/defense",
+        },
+      ],
+    };
+
+    const migrated = migrateBackupPayloadForTests(currentText, legacy);
+
+    expect(migrated.schemaVersion).toBe(BACKUP_SCHEMA_VERSION);
+    expect(migrated.replacements).toHaveLength(1);
+    expect(migrated.replacements[0].tokenKey).toBe("icon/defense");
+    expect(migrated.replacements[0].valueAtSave).toBe("◆");
+    expect(migrated.replacements[0].variableId).toBe("");
+    expect(typeof migrated.mappingHash).toBe("string");
+    expect(typeof migrated.replacedTextHash).toBe("string");
+  });
+
+  test("v2 backup rejects restore when replacedTextHash does not match current text", () => {
+    const backup = {
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      replacedTextHash: hashStringFNV1a("Target ◆ now."),
+      replacements: [
+        {
+          start: "Target ".length,
+          len: 1,
+          originalText: "@icon/defense",
+          valueAtSave: "◆",
+        },
+      ],
+    };
+
+    expect(isBackupApplicable("Target ✦ now.", backup)).toBe(false);
+  });
+
+  test("v2 backup can validate with valueAtSave even when snapshot is missing", () => {
+    const currentText = "Use ◆ now.";
+    const backup = {
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      replacedTextHash: hashStringFNV1a(currentText),
+      replacements: [
+        {
+          start: "Use ".length,
+          len: 1,
+          originalText: "@icon/defense",
+          valueAtSave: "◆",
+        },
+      ],
+    };
+
+    expect(isBackupApplicable(currentText, backup)).toBe(true);
+  });
+
+  test("restore simulation supports legacy backup by migrating first", () => {
+    const currentText = "Use ◆ now.";
+    const legacy = {
+      snapshot: { "icon/defense": "◆" },
+      replacements: [
+        {
+          start: "Use ".length,
+          len: 1,
+          originalText: "@icon/defense",
+        },
+      ],
+    };
+
+    const result = restoreFromBackupSimulation(currentText, legacy);
+    expect(result.restored).toBe(true);
+    expect(result.text).toBe("Use @icon/defense now.");
+  });
+
+  test("icon mapping hash is deterministic regardless of entry order", () => {
+    const a = computeIconMappingHashFromEntries([
+      { key: "icon/grass", value: "a", variableId: "1" },
+      { key: "icon/water", value: "f", variableId: "2" },
+    ]);
+    const b = computeIconMappingHashFromEntries([
+      { key: "icon/water", value: "f", variableId: "2" },
+      { key: "icon/grass", value: "a", variableId: "1" },
+    ]);
+
+    expect(a).toBe(b);
   });
 });
 

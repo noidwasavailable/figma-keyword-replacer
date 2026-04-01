@@ -4,10 +4,11 @@
 
 /* CONFIG */
 const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)+\b/g;
-const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON: { original: "...", vars: {key: value}, collection: "name", replacements: [...] }
+const PLUGIN_DATA_KEY = "prr:backup"; // stores JSON backup payload (versioned)
 const DOC_SETTINGS_KEY = "prr:settings";
 const DEFAULT_COLLECTION_NAME = "Keywords";
 const DEBUG_LOGS = false;
+const BACKUP_SCHEMA_VERSION = 2;
 
 /* Utility: safe get/create collection */
 async function getOrCreateCollection(name) {
@@ -59,12 +60,16 @@ function saveNodeBackup(
   snapshot,
   collectionName,
   replacements,
+  meta,
 ) {
   const payload = {
+    schemaVersion: BACKUP_SCHEMA_VERSION,
     original: originalText,
     snapshot: snapshot || {},
     collection: collectionName || DEFAULT_COLLECTION_NAME,
     replacements: replacements || [],
+    mappingHash: (meta && meta.mappingHash) || "",
+    replacedTextHash: (meta && meta.replacedTextHash) || "",
     ts: Date.now(),
   };
   try {
@@ -100,13 +105,139 @@ function debugLog(...args) {
   console.log("[PRR]", ...args);
 }
 
+function normalizeTokenKey(input) {
+  return String(input || "")
+    .trim()
+    .replace(/^@/, "")
+    .toLowerCase();
+}
+
+function isIconTokenKey(key) {
+  return normalizeTokenKey(key).startsWith("icon/");
+}
+
+// Fast deterministic hash for backup integrity checks
+function hashStringFNV1a(str) {
+  let h = 0x811c9dc5;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h +=
+      (h << 1) +
+      (h << 4) +
+      (h << 7) +
+      (h << 8) +
+      (h << 24);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function computeIconMappingHashFromEntries(entries) {
+  const normalized = (entries || [])
+    .filter(Boolean)
+    .map((entry) => {
+      const key = normalizeTokenKey(entry.key);
+      const value = String(entry.value || "");
+      const variableId = String(entry.variableId || "");
+      return `${key}|${value}|${variableId}`;
+    })
+    .sort();
+  return hashStringFNV1a(normalized.join("||"));
+}
+
+async function computeCurrentIconMappingHash(collectionName, iconKeys, consumer) {
+  const normalizedKeys = [...new Set((iconKeys || []).map(normalizeTokenKey))]
+    .filter((k) => k.startsWith("icon/"));
+
+  if (normalizedKeys.length === 0) return "";
+
+  const collection = await getOrCreateCollection(
+    collectionName || DEFAULT_COLLECTION_NAME,
+  );
+
+  const entries = [];
+  for (const key of normalizedKeys) {
+    const variable = await findStringVariable(collection, key);
+    if (!variable) continue;
+
+    const value = await resolveVariableValue(variable, consumer);
+    entries.push({
+      key,
+      value: typeof value === "string" ? value : String(value || ""),
+      variableId: variable.id || "",
+    });
+  }
+
+  return computeIconMappingHashFromEntries(entries);
+}
+
+function migrateBackupPayload(node, backup) {
+  if (!backup) return null;
+  if (backup.schemaVersion === BACKUP_SCHEMA_VERSION) return backup;
+
+  const legacyReplacements = Array.isArray(backup.replacements)
+    ? backup.replacements
+    : [];
+  if (!legacyReplacements.length) return backup;
+
+  const snapshot = backup.snapshot || {};
+  const migratedReplacements = legacyReplacements.map((rep) => {
+    const originalText = String(rep.originalText || "");
+    const tokenKey = normalizeTokenKey(
+      originalText.startsWith("@")
+        ? originalText.slice(1)
+        : rep.tokenKey || "",
+    );
+    const valueAtSave =
+      typeof snapshot[tokenKey] === "string" ? snapshot[tokenKey] : "";
+
+    return Object.assign({}, rep, {
+      tokenKey: tokenKey,
+      valueAtSave: valueAtSave,
+      variableId: rep.variableId || "",
+    });
+  });
+
+  const iconEntries = migratedReplacements
+    .filter((rep) => isIconTokenKey(rep.tokenKey))
+    .map((rep) => ({
+      key: rep.tokenKey,
+      value: rep.valueAtSave,
+      variableId: rep.variableId || "",
+    }));
+
+  const migrated = Object.assign({}, backup, {
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    replacements: migratedReplacements,
+    mappingHash:
+      backup.mappingHash || computeIconMappingHashFromEntries(iconEntries),
+    replacedTextHash:
+      backup.replacedTextHash || hashStringFNV1a(String(node.characters || "")),
+  });
+
+  try {
+    node.setPluginData(PLUGIN_DATA_KEY, JSON.stringify(migrated));
+  } catch (e) {
+    console.warn("Failed to persist migrated backup", e);
+  }
+
+  return migrated;
+}
+
 function isBackupApplicable(node, backup) {
   if (!backup || !Array.isArray(backup.replacements) || backup.replacements.length === 0) {
     return false;
   }
 
   const currentText = node.characters;
-  const snapshot = backup.snapshot || {};
+
+  if (
+    backup.schemaVersion === BACKUP_SCHEMA_VERSION &&
+    backup.replacedTextHash &&
+    backup.replacedTextHash !== hashStringFNV1a(currentText)
+  ) {
+    return false;
+  }
 
   for (const rep of backup.replacements) {
     if (!rep || typeof rep.start !== "number" || typeof rep.len !== "number") {
@@ -122,11 +253,11 @@ function isBackupApplicable(node, backup) {
       return false;
     }
 
-    const key = originalText.slice(1);
-    const expectedValue = snapshot[key];
-    if (typeof expectedValue !== "string") {
-      return false;
-    }
+    const expectedValue = String(
+      typeof rep.valueAtSave === "string"
+        ? rep.valueAtSave
+        : "",
+    );
 
     const actualValue = currentText.slice(rep.start, rep.start + rep.len);
     if (actualValue !== expectedValue) {
@@ -164,6 +295,7 @@ async function replacePlaceholdersInNode(node, collectionName) {
   const snapshot = {};
   const replacements = [];
   const ops = [];
+  const iconHashEntries = [];
   let runningDelta = 0;
   let hasIconReplacement = false;
 
@@ -184,8 +316,10 @@ async function replacePlaceholdersInNode(node, collectionName) {
 
     snapshot[mm.key] = resolvedValue;
 
+    const tokenKey = normalizeTokenKey(mm.key);
+
     // Check if this is an icon
-    const isIcon = mm.key.startsWith("icon/");
+    const isIcon = isIconTokenKey(tokenKey);
     if (isIcon) hasIconReplacement = true;
 
     // Capture original font for restoration
@@ -206,7 +340,18 @@ async function replacePlaceholdersInNode(node, collectionName) {
       len: resolvedValue.length,
       originalText: mm.text,
       originalFont,
+      tokenKey,
+      valueAtSave: resolvedValue,
+      variableId: variable.id || "",
     });
+
+    if (isIcon) {
+      iconHashEntries.push({
+        key: tokenKey,
+        value: resolvedValue,
+        variableId: variable.id || "",
+      });
+    }
 
     // Track for replacement
     ops.push({
@@ -241,9 +386,6 @@ async function replacePlaceholdersInNode(node, collectionName) {
     }
   }
 
-  // Save backup with replacements info
-  saveNodeBackup(node, text, snapshot, collection.name, replacements);
-
   // Apply replacements in reverse order to preserve indices
   // ops contains original indices, which are valid if we work right-to-left
   for (let i = ops.length - 1; i >= 0; i--) {
@@ -274,12 +416,24 @@ async function replacePlaceholdersInNode(node, collectionName) {
     node.deleteCharacters(delStart, delStart + op.removeLen);
   }
 
+  const mappingHash = computeIconMappingHashFromEntries(iconHashEntries);
+  const replacedTextHash = hashStringFNV1a(node.characters);
+
+  // Save backup after final text is applied so hash reflects the true replaced state
+  saveNodeBackup(node, text, snapshot, collection.name, replacements, {
+    mappingHash,
+    replacedTextHash,
+  });
+
   return { changed: true, snapshot };
 }
 
 /* Restore original placeholder text in node if pluginData exists */
 async function restorePlaceholdersInNode(node) {
-  const backup = readNodeBackup(node);
+  let backup = readNodeBackup(node);
+  if (!backup) return { restored: false };
+
+  backup = migrateBackupPayload(node, backup);
   if (!backup) return { restored: false };
 
   const applicable = isBackupApplicable(node, backup);
@@ -291,6 +445,29 @@ async function restorePlaceholdersInNode(node) {
     });
     clearNodeBackup(node);
     return { restored: false };
+  }
+
+  const backupIconKeys = (backup.replacements || [])
+    .map((rep) => normalizeTokenKey(rep.tokenKey || rep.originalText))
+    .filter((key) => isIconTokenKey(key));
+
+  if (backup.mappingHash && backupIconKeys.length > 0) {
+    try {
+      const currentHash = await computeCurrentIconMappingHash(
+        backup.collection || DEFAULT_COLLECTION_NAME,
+        backupIconKeys,
+        node,
+      );
+      if (currentHash && currentHash !== backup.mappingHash) {
+        debugLog("Detected icon mapping drift; proceeding with placeholder restore safely", {
+          nodeId: node.id,
+          backupHash: backup.mappingHash,
+          currentHash,
+        });
+      }
+    } catch (e) {
+      console.warn("Failed mapping-hash validation during restore", e);
+    }
   }
 
   debugLog("Restoring placeholders from backup", {
@@ -314,9 +491,21 @@ async function restorePlaceholdersInNode(node) {
     await safeLoadFonts(fontsToLoad);
 
     for (const rep of reps) {
-      // rep.start is where the value starts in the current (replaced) text
-      // rep.len is the length of the value
-      // rep.originalText is the placeholder (e.g. "@keyword")
+      if (
+        typeof rep.start !== "number" ||
+        typeof rep.len !== "number" ||
+        rep.start < 0 ||
+        rep.len < 0 ||
+        rep.start + rep.len > node.characters.length
+      ) {
+        debugLog("Invalid replacement range during restore; clearing backup", {
+          nodeId: node.id,
+          rep,
+          textLength: node.characters.length,
+        });
+        clearNodeBackup(node);
+        return { restored: false };
+      }
 
       // Insert placeholder
       node.insertCharacters(rep.start, rep.originalText, "BEFORE");

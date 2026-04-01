@@ -233,7 +233,7 @@
       </p>
 
       <p>
-        <small>v0.5</small>
+        <small>v0.6</small>
       </p>
     </div>
 
@@ -312,7 +312,7 @@
         } else if (msg.type === "autocomplete-query") {
           const q = (msg.query || "").toLowerCase();
           const matches = allVariablesForAutocomplete.filter(v => v.toLowerCase().includes(q));
-          
+
           if (matches.length > 0) {
             autocompletePanel.innerHTML = "";
             autocompletePanel.style.display = "block";
