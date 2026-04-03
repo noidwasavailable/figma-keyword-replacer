@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.10",
+    "@figma/plugin-typings": "^1.124.0",
     "@types/bun": "latest"
   },
   "peerDependencies": {

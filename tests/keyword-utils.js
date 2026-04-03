@@ -51,10 +51,11 @@ export function isVariableNameMatch(variableName, key) {
 export function extractPlaceholders(text) {
   const input = String(text ?? "");
   const out = [];
-  let match;
-
   PLACEHOLDER_REGEX.lastIndex = 0;
-  while ((match = PLACEHOLDER_REGEX.exec(input)) !== null) {
+  while (true) {
+    const match = PLACEHOLDER_REGEX.exec(input);
+    if (match === null) break;
+
     const token = match[0];
     out.push({
       key: token.slice(1),
@@ -90,7 +91,7 @@ export function resolvePlaceholdersInText(text, resolveValue) {
       : (key) => {
           if (
             resolveValue &&
-            Object.prototype.hasOwnProperty.call(resolveValue, key)
+            Object.hasOwn(resolveValue, key)
           ) {
             return resolveValue[key];
           }
@@ -414,7 +415,7 @@ export function buildIconGlyphToTokenAliasMapForTests(entries) {
     const glyph = String(entry?.glyph ?? entry?.value ?? "");
     if (!tokenKey.startsWith("icon/") || !glyph) continue;
 
-    if (!Object.prototype.hasOwnProperty.call(map, glyph)) {
+    if (!Object.hasOwn(map, glyph)) {
       map[glyph] = tokenKey;
       continue;
     }
@@ -472,7 +473,7 @@ export function simulateFallbackIconFontGlyphRecoveryForTests({
         ops.push({
           start: idx,
           len: glyph.length,
-          placeholder: "@" + map[glyph],
+          placeholder: `@${map[glyph]}`,
           glyph,
         });
 

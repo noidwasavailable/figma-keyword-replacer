@@ -6,6 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"files": {
+		"includes": ["**", "!!**/dist", "!!**/node_modules"],
 		"ignoreUnknown": false
 	},
 	"formatter": {
@@ -21,6 +22,11 @@
 	"javascript": {
 		"formatter": {
 			"quoteStyle": "double"
+		}
+	},
+	"html": {
+		"formatter": {
+			"indentStyle": "space"
 		}
 	},
 	"assist": {
