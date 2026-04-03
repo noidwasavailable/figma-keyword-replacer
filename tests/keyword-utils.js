@@ -296,6 +296,213 @@ export function restoreFromBackupSimulation(currentText, backup) {
 }
 
 /**
+ * Stale-recovery helper:
+ * strip trailing punctuation from a value candidate.
+ */
+export function stripTrailingPunctuationForTests(value) {
+  return String(value ?? "").replace(/[.,:;!?]+$/g, "");
+}
+
+/**
+ * Stale-recovery helper:
+ * find the best candidate occurrence near an anchor index.
+ */
+export function findBestRecoveryCandidateForTests(
+  text,
+  candidates,
+  anchor,
+  windowSize = 24,
+) {
+  const source = String(text ?? "");
+  const anchorIdx = typeof anchor === "number" ? anchor : 0;
+  const win = typeof windowSize === "number" ? windowSize : 24;
+
+  let best = null;
+
+  for (const raw of candidates ?? []) {
+    const rawNeedle = String(raw ?? "");
+    if (!rawNeedle) continue;
+
+    const variants = [];
+    const seen = new Set();
+
+    const addVariant = (v) => {
+      const s = String(v ?? "");
+      if (!s || seen.has(s)) return;
+      seen.add(s);
+      variants.push(s);
+    };
+
+    addVariant(rawNeedle);
+    addVariant(stripTrailingPunctuationForTests(rawNeedle));
+
+    for (const needle of variants) {
+      if (
+        anchorIdx >= 0 &&
+        anchorIdx + needle.length <= source.length &&
+        source.slice(anchorIdx, anchorIdx + needle.length) === needle
+      ) {
+        return { start: anchorIdx, len: needle.length, value: needle };
+      }
+
+      let idx = source.indexOf(needle);
+      while (idx !== -1) {
+        const distance = Math.abs(idx - anchorIdx);
+        if (distance <= win) {
+          if (
+            !best ||
+            distance < best.distance ||
+            (distance === best.distance && needle.length > best.len)
+          ) {
+            best = {
+              start: idx,
+              len: needle.length,
+              value: needle,
+              distance,
+            };
+          }
+        }
+        idx = source.indexOf(needle, idx + 1);
+      }
+    }
+  }
+
+  if (!best) return null;
+  return { start: best.start, len: best.len, value: best.value };
+}
+
+/**
+ * Normalize font tokens for tolerant family/style comparisons.
+ */
+export function normalizeFontTokenForTests(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Font-match simulation with optional family-only fallback.
+ */
+export function isFontMatchForTests(font, family, style, allowFamilyFallback = true) {
+  if (!font || typeof font !== "object") return false;
+  if (!family) return false;
+
+  const fontFamily = normalizeFontTokenForTests(font.family);
+  const targetFamily = normalizeFontTokenForTests(family);
+  if (!fontFamily || !targetFamily || fontFamily !== targetFamily) return false;
+
+  const hasTargetStyle = Boolean(String(style ?? "").trim());
+  if (!hasTargetStyle) return true;
+
+  const fontStyle = normalizeFontTokenForTests(font.style);
+  const targetStyle = normalizeFontTokenForTests(style);
+  if (fontStyle === targetStyle) return true;
+
+  return !!allowFamilyFallback;
+}
+
+/**
+ * Build glyph -> token map for fallback recovery.
+ * Collisions are treated as aliases and collapse to deterministic canonical key.
+ */
+export function buildIconGlyphToTokenAliasMapForTests(entries) {
+  const map = {};
+
+  for (const entry of entries ?? []) {
+    const tokenKey = normalizeVariableName(entry?.tokenKey ?? entry?.key);
+    const glyph = String(entry?.glyph ?? entry?.value ?? "");
+    if (!tokenKey.startsWith("icon/") || !glyph) continue;
+
+    if (!Object.prototype.hasOwnProperty.call(map, glyph)) {
+      map[glyph] = tokenKey;
+      continue;
+    }
+
+    if (map[glyph] !== tokenKey) {
+      map[glyph] = map[glyph] < tokenKey ? map[glyph] : tokenKey;
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Pure icon-font fallback scan simulation:
+ * scans only segments matching icon font and converts mapped glyphs to placeholders.
+ *
+ * `segments` shape:
+ * - [{ start, end, fontName: { family, style } }, ...]
+ */
+export function simulateFallbackIconFontGlyphRecoveryForTests({
+  text,
+  segments,
+  iconFontFamily,
+  iconFontStyle,
+  glyphToToken,
+}) {
+  const source = String(text ?? "");
+  const map = glyphToToken || {};
+  const usableGlyphs = Object.keys(map).filter((glyph) => Boolean(map[glyph]));
+  if (!iconFontFamily || usableGlyphs.length === 0) {
+    return { changed: false, text: source, replacements: [] };
+  }
+
+  usableGlyphs.sort((a, b) => b.length - a.length);
+
+  const ops = [];
+
+  for (const seg of segments ?? []) {
+    if (!isFontMatchForTests(seg?.fontName, iconFontFamily, iconFontStyle, true)) {
+      continue;
+    }
+
+    const segStart = Math.max(0, Number(seg?.start ?? 0));
+    const segEnd = Math.min(source.length, Number(seg?.end ?? segStart));
+    if (segEnd <= segStart) continue;
+
+    let idx = segStart;
+    while (idx < segEnd) {
+      let matched = false;
+
+      for (const glyph of usableGlyphs) {
+        if (idx + glyph.length > segEnd) continue;
+        if (source.slice(idx, idx + glyph.length) !== glyph) continue;
+
+        ops.push({
+          start: idx,
+          len: glyph.length,
+          placeholder: "@" + map[glyph],
+          glyph,
+        });
+
+        idx += glyph.length;
+        matched = true;
+        break;
+      }
+
+      if (!matched) idx++;
+    }
+  }
+
+  if (ops.length === 0) {
+    return { changed: false, text: source, replacements: [] };
+  }
+
+  const sorted = [...ops].sort((a, b) => b.start - a.start);
+  let out = source;
+
+  for (const op of sorted) {
+    out =
+      out.slice(0, op.start) +
+      op.placeholder +
+      out.slice(op.start + op.len);
+  }
+
+  return { changed: true, text: out, replacements: sorted.reverse() };
+}
+
+/**
  * Utility for tests:
  * Find the first matching variable name from a list, or null.
  */

@@ -211,6 +211,10 @@
         <button id="restore-page">Restore on page</button>
       </div>
       <div class="row">
+        <button id="recover-stale">Recover stale (selection)</button>
+        <button id="recover-stale-page">Recover stale (page)</button>
+      </div>
+      <div class="row">
         <button id="minimize">Minimize</button>
         <button id="close" style="border-color: var(--figma-color-border-danger); color: var(--figma-color-text-danger);">Stop Plugin</button>
       </div>
@@ -256,6 +260,8 @@
       const restoreBtn = document.getElementById("restore");
       const runPageBtn = document.getElementById("run-page");
       const restorePageBtn = document.getElementById("restore-page");
+      const recoverStaleBtn = document.getElementById("recover-stale");
+      const recoverStalePageBtn = document.getElementById("recover-stale-page");
       const minimizeBtn = document.getElementById("minimize");
       const closeBtn = document.getElementById("close");
       const maximizeBtn = document.getElementById("maximize");
@@ -506,6 +512,22 @@
           "*",
         );
         statusEl.textContent = "Restoring placeholders on page…";
+      };
+
+      recoverStaleBtn.onclick = () => {
+        parent.postMessage(
+          { pluginMessage: { type: "recover-stale-on-selection" } },
+          "*",
+        );
+        statusEl.textContent = "Recovering stale backup on selection…";
+      };
+
+      recoverStalePageBtn.onclick = () => {
+        parent.postMessage(
+          { pluginMessage: { type: "recover-stale-on-page" } },
+          "*",
+        );
+        statusEl.textContent = "Recovering stale backup on page…";
       };
 
       minimizeBtn.onclick = () => {

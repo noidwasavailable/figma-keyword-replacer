@@ -268,6 +268,411 @@ function isBackupApplicable(node, backup) {
   return true;
 }
 
+async function resolveCurrentValuesForTokenKeys(collectionName, tokenKeys, consumer) {
+  const out = {};
+  const unique = {};
+  const keys = [];
+
+  for (const key of tokenKeys || []) {
+    const normalized = normalizeTokenKey(key);
+    if (!normalized || unique[normalized]) continue;
+    unique[normalized] = true;
+    keys.push(normalized);
+  }
+
+  if (keys.length === 0) return out;
+
+  const collection = await getOrCreateCollection(
+    collectionName || DEFAULT_COLLECTION_NAME,
+  );
+
+  for (const key of keys) {
+    const variable = await findStringVariable(collection, key);
+    if (!variable) continue;
+    const resolved = await resolveVariableValue(variable, consumer);
+    out[key] = typeof resolved === "string" ? resolved : String(resolved || "");
+  }
+
+  return out;
+}
+
+function stripTrailingPunctuation(value) {
+  return String(value || "").replace(/[.,:;!?]+$/g, "");
+}
+
+function findBestRecoveryCandidate(text, candidates, anchor, windowSize) {
+  const source = String(text || "");
+  const anchorIdx = typeof anchor === "number" ? anchor : 0;
+  const win = typeof windowSize === "number" ? windowSize : 24;
+
+  let best = null;
+
+  for (const raw of candidates || []) {
+    const rawNeedle = String(raw || "");
+    if (!rawNeedle) continue;
+
+    const variants = [];
+    const seen = {};
+    const addVariant = (v) => {
+      const s = String(v || "");
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      variants.push(s);
+    };
+
+    addVariant(rawNeedle);
+    addVariant(stripTrailingPunctuation(rawNeedle));
+
+    for (const needle of variants) {
+      if (
+        anchorIdx >= 0 &&
+        anchorIdx + needle.length <= source.length &&
+        source.slice(anchorIdx, anchorIdx + needle.length) === needle
+      ) {
+        return { start: anchorIdx, len: needle.length, value: needle };
+      }
+
+      let idx = source.indexOf(needle);
+      while (idx !== -1) {
+        const distance = Math.abs(idx - anchorIdx);
+        if (distance <= win) {
+          if (
+            !best ||
+            distance < best.distance ||
+            (distance === best.distance && needle.length > best.len)
+          ) {
+            best = {
+              start: idx,
+              len: needle.length,
+              value: needle,
+              distance,
+            };
+          }
+        }
+        idx = source.indexOf(needle, idx + 1);
+      }
+    }
+  }
+
+  if (!best) return null;
+  return { start: best.start, len: best.len, value: best.value };
+}
+
+function normalizeFontToken(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function isFontMatch(font, family, style, allowFamilyFallback) {
+  if (!font || typeof font !== "object") return false;
+  if (!family) return false;
+
+  const fontFamily = normalizeFontToken(font.family);
+  const targetFamily = normalizeFontToken(family);
+  if (!fontFamily || !targetFamily || fontFamily !== targetFamily) return false;
+
+  const hasTargetStyle = Boolean(String(style || "").trim());
+  if (!hasTargetStyle) return true;
+
+  const fontStyle = normalizeFontToken(font.style);
+  const targetStyle = normalizeFontToken(style);
+  if (fontStyle === targetStyle) return true;
+
+  return Boolean(allowFamilyFallback);
+}
+
+function pickNormalFontFromNodeSegments(node) {
+  try {
+    const segments = node.getStyledTextSegments(["fontName"]);
+    for (const seg of segments) {
+      const f = seg.fontName;
+      if (
+        f &&
+        typeof f === "object" &&
+        (!iconFontFamily || !isFontMatch(f, iconFontFamily, iconFontStyle, true))
+      ) {
+        return f;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+}
+
+async function buildIconGlyphToTokenMap(collectionName, consumer, seedValuesByToken) {
+  const map = {};
+
+  function markGlyphToken(glyph, tokenKey) {
+    const g = String(glyph || "");
+    const key = normalizeTokenKey(tokenKey);
+
+    if (!g || !key || !isIconTokenKey(key)) return;
+
+    if (!Object.prototype.hasOwnProperty.call(map, g)) {
+      map[g] = key;
+      return;
+    }
+
+    // Alias collision: keep deterministic canonical key.
+    if (map[g] !== key) {
+      map[g] = map[g] < key ? map[g] : key;
+    }
+  }
+
+  const seeded = seedValuesByToken || {};
+  for (const tokenKey in seeded) {
+    if (!Object.prototype.hasOwnProperty.call(seeded, tokenKey)) continue;
+    markGlyphToken(seeded[tokenKey], tokenKey);
+  }
+
+  const collection = await getOrCreateCollection(
+    collectionName || DEFAULT_COLLECTION_NAME,
+  );
+  const vars = await figma.variables.getLocalVariablesAsync("STRING");
+
+  for (const variable of vars) {
+    if (!variable || variable.variableCollectionId !== collection.id) continue;
+
+    const key = normalizeTokenKey(variable.name);
+    if (!isIconTokenKey(key)) continue;
+
+    const value = await resolveVariableValue(variable, consumer);
+    markGlyphToken(value, key);
+  }
+
+  return map;
+}
+
+async function fallbackRecoverByIconFontScan(node, backup, currentValuesByToken) {
+  if (!iconFontFamily) return { recoveredCount: 0 };
+
+  const glyphToToken = await buildIconGlyphToTokenMap(
+    (backup && backup.collection) || DEFAULT_COLLECTION_NAME,
+    node,
+    currentValuesByToken,
+  );
+
+  const usableGlyphs = Object.keys(glyphToToken).filter(function (glyph) {
+    return Boolean(glyphToToken[glyph]);
+  });
+  if (usableGlyphs.length === 0) return { recoveredCount: 0 };
+
+  usableGlyphs.sort(function (a, b) {
+    return b.length - a.length;
+  });
+
+  const normalFont = pickNormalFontFromNodeSegments(node);
+  const text = String(node.characters || "");
+  const ops = [];
+
+  let segments = [];
+  try {
+    segments = node.getStyledTextSegments(["fontName", "characters"]) || [];
+  } catch (e) {
+    return { recoveredCount: 0 };
+  }
+
+  let runningOffset = 0;
+
+  for (const seg of segments) {
+    const hasExplicitRange =
+      typeof seg.start === "number" && typeof seg.end === "number";
+
+    const segChars = typeof seg.characters === "string" ? seg.characters : "";
+    const segStart = hasExplicitRange ? seg.start : runningOffset;
+
+    let segLen = hasExplicitRange
+      ? Math.max(0, seg.end - seg.start)
+      : segChars.length;
+    if (segLen <= 0) continue;
+
+    let segEnd = segStart + segLen;
+    if (segEnd > text.length) segEnd = text.length;
+    runningOffset = segEnd;
+
+    if (!isFontMatch(seg.fontName, iconFontFamily, iconFontStyle, true)) continue;
+    if (segEnd <= segStart) continue;
+
+    let idx = segStart;
+    while (idx < segEnd) {
+      let matched = false;
+
+      for (const glyph of usableGlyphs) {
+        if (!glyph) continue;
+        if (idx + glyph.length > segEnd) continue;
+        if (text.slice(idx, idx + glyph.length) !== glyph) continue;
+
+        const tokenKey = glyphToToken[glyph];
+        if (!tokenKey) continue;
+
+        ops.push({
+          start: idx,
+          len: glyph.length,
+          placeholder: "@" + tokenKey,
+        });
+
+        idx += glyph.length;
+        matched = true;
+        break;
+      }
+
+      if (!matched) idx++;
+    }
+  }
+
+  if (ops.length === 0) return { recoveredCount: 0 };
+
+  const fontsReady = await safeLoadFontsForNode(node);
+  if (!fontsReady) return { recoveredCount: 0 };
+
+  if (normalFont) {
+    await safeLoadFonts([normalFont]);
+  }
+
+  ops.sort(function (a, b) {
+    return b.start - a.start;
+  });
+
+  let recoveredCount = 0;
+  for (const op of ops) {
+    node.insertCharacters(op.start, op.placeholder, "BEFORE");
+
+    if (normalFont) {
+      try {
+        node.setRangeFontName(
+          op.start,
+          op.start + op.placeholder.length,
+          normalFont,
+        );
+      } catch (e) {
+        // keep text recovery even if style application fails
+      }
+    }
+
+    const delStart = op.start + op.placeholder.length;
+    node.deleteCharacters(delStart, delStart + op.len);
+    recoveredCount++;
+  }
+
+  return { recoveredCount };
+}
+
+async function attemptStaleBackupRecovery(node, backup) {
+  const replacements = Array.isArray(backup && backup.replacements)
+    ? backup.replacements
+    : [];
+  if (replacements.length === 0) {
+    return { restored: false, recoveredCount: 0, total: 0 };
+  }
+
+  const snapshot = (backup && backup.snapshot) || {};
+  const iconTokenKeys = [];
+
+  for (const rep of replacements) {
+    const tokenKey = normalizeTokenKey(rep && (rep.tokenKey || rep.originalText));
+    if (tokenKey && isIconTokenKey(tokenKey)) {
+      iconTokenKeys.push(tokenKey);
+    }
+  }
+
+  const currentValuesByToken = await resolveCurrentValuesForTokenKeys(
+    (backup && backup.collection) || DEFAULT_COLLECTION_NAME,
+    iconTokenKeys,
+    node,
+  );
+
+  const fontsReady = await safeLoadFontsForNode(node);
+  if (!fontsReady) {
+    return { restored: false, recoveredCount: 0, total: 0 };
+  }
+
+  const reps = replacements.slice().sort((a, b) => b.start - a.start);
+  const fontsToLoad = [];
+  for (const rep of reps) {
+    if (rep && rep.originalFont) fontsToLoad.push(rep.originalFont);
+  }
+  await safeLoadFonts(fontsToLoad);
+
+  let recoveredCount = 0;
+
+  for (const rep of reps) {
+    const placeholder = String((rep && rep.originalText) || "");
+    if (!placeholder.startsWith("@")) continue;
+
+    const tokenKey = normalizeTokenKey(rep.tokenKey || placeholder);
+    const candidates = [];
+    const seen = {};
+
+    const pushCandidate = (v) => {
+      const s = String(v || "");
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      candidates.push(s);
+    };
+
+    pushCandidate(rep.valueAtSave);
+    if (typeof snapshot[tokenKey] === "string") pushCandidate(snapshot[tokenKey]);
+    if (typeof currentValuesByToken[tokenKey] === "string") pushCandidate(currentValuesByToken[tokenKey]);
+
+    if (candidates.length === 0) continue;
+
+    const best = findBestRecoveryCandidate(
+      node.characters,
+      candidates,
+      typeof rep.start === "number" ? rep.start : 0,
+      24,
+    );
+
+    if (!best) continue;
+
+    node.insertCharacters(best.start, placeholder, "BEFORE");
+
+    if (rep.originalFont) {
+      try {
+        node.setRangeFontName(
+          best.start,
+          best.start + placeholder.length,
+          rep.originalFont,
+        );
+      } catch (e) {
+        console.warn("Failed to apply original font during stale recovery", e);
+      }
+    }
+
+    const delStart = best.start + placeholder.length;
+    node.deleteCharacters(delStart, delStart + best.len);
+    recoveredCount++;
+  }
+
+  let fallbackRecoveredCount = 0;
+
+  if (recoveredCount === 0) {
+    try {
+      const fallback = await fallbackRecoverByIconFontScan(
+        node,
+        backup,
+        currentValuesByToken,
+      );
+      fallbackRecoveredCount = fallback && fallback.recoveredCount
+        ? fallback.recoveredCount
+        : 0;
+      recoveredCount += fallbackRecoveredCount;
+    } catch (e) {
+      console.warn("Fallback icon-font stale recovery failed", e);
+    }
+  }
+
+  return {
+    restored: recoveredCount > 0,
+    recoveredCount,
+    total: reps.length,
+    fallbackRecoveredCount,
+  };
+}
+
 /* Replace placeholders in a TextNode with variable values, save backup */
 async function replacePlaceholdersInNode(node, collectionName) {
   const text = node.characters;
@@ -371,7 +776,11 @@ async function replacePlaceholdersInNode(node, collectionName) {
   }
 
   // Load fonts to avoid errors when setting characters
-  await safeLoadFontsForNode(node);
+  const fontsReady = await safeLoadFontsForNode(node);
+  if (!fontsReady) {
+    debugLog("Skipping replace due to missing/unloadable font", { nodeId: node.id });
+    return { changed: false };
+  }
   // Also load icon font if needed
   let iconFontLoaded = false;
   if (hasIconReplacement && iconFontFamily) {
@@ -438,11 +847,32 @@ async function restorePlaceholdersInNode(node) {
 
   const applicable = isBackupApplicable(node, backup);
   if (!applicable) {
-    debugLog("Skipping restore due to stale/invalid backup", {
+    debugLog("Backup marked stale/invalid. Attempting icon recovery.", {
       nodeId: node.id,
       nodeText: node.characters,
       backup,
     });
+
+    try {
+      const recovery = await attemptStaleBackupRecovery(node, backup);
+      if (recovery.restored) {
+        debugLog("Recovered placeholders from stale backup", {
+          nodeId: node.id,
+          recoveredCount: recovery.recoveredCount,
+          total: recovery.total,
+        });
+        clearNodeBackup(node);
+        return {
+          restored: true,
+          recoveredFromStale: true,
+          recoveredCount: recovery.recoveredCount,
+          totalCandidates: recovery.total,
+        };
+      }
+    } catch (e) {
+      console.warn("Stale backup recovery failed", e);
+    }
+
     clearNodeBackup(node);
     return { restored: false };
   }
@@ -476,7 +906,11 @@ async function restorePlaceholdersInNode(node) {
   });
 
   // Load fonts
-  await safeLoadFontsForNode(node);
+  const fontsReady = await safeLoadFontsForNode(node);
+  if (!fontsReady) {
+    debugLog("Skipping restore due to missing/unloadable font", { nodeId: node.id });
+    return { restored: false };
+  }
 
   // If we have precise replacement tracking, use it to restore styles
   if (backup.replacements && Array.isArray(backup.replacements)) {
@@ -541,39 +975,105 @@ async function restorePlaceholdersInNode(node) {
   return { restored: false };
 }
 
+async function recoverStaleBackupInNode(node) {
+  let backup = readNodeBackup(node);
+  if (backup) {
+    backup = migrateBackupPayload(node, backup);
+    if (!backup) {
+      return { recovered: false, skipped: true, reason: "invalid-backup" };
+    }
+  }
+
+  // 1) If backup exists and is stale, attempt targeted stale recovery first.
+  if (backup && !isBackupApplicable(node, backup)) {
+    const recovery = await attemptStaleBackupRecovery(node, backup);
+
+    // Clear stale backup after targeted recovery attempt to avoid repeated corruption loops.
+    clearNodeBackup(node);
+
+    if (recovery && recovery.restored) {
+      return {
+        recovered: true,
+        recoveredCount: recovery.recoveredCount || 0,
+        totalCandidates: recovery.total || 0,
+        fallbackRecoveredCount: recovery.fallbackRecoveredCount || 0,
+      };
+    }
+  }
+
+  // 2) Fallback scan: recover icon-font glyphs even when:
+  //    - there is no backup
+  //    - backup is still applicable
+  const fallback = await fallbackRecoverByIconFontScan(
+    node,
+    backup,
+    {},
+  );
+  const recoveredCount = fallback && fallback.recoveredCount
+    ? fallback.recoveredCount
+    : 0;
+
+  if (recoveredCount > 0) {
+    // Existing backup no longer reflects text once fallback recovery edits the node.
+    clearNodeBackup(node);
+    return {
+      recovered: true,
+      recoveredCount,
+      totalCandidates: recoveredCount,
+      fallbackRecoveredCount: recoveredCount,
+    };
+  }
+
+  return {
+    recovered: false,
+    skipped: true,
+    reason: backup ? "not-recoverable" : "no-backup-and-no-icon-glyphs",
+  };
+}
+
 /* Helper: load a list of fonts safely */
 async function safeLoadFonts(fonts) {
   try {
     const unique = [];
     const seen = new Set();
-    for (const f of fonts) {
+    for (const f of fonts || []) {
+      if (!f || typeof f !== "object" || !f.family || !f.style) continue;
+      if (f === figma.mixed) continue;
       const k = `${f.family}__${f.style}`;
       if (!seen.has(k)) {
         seen.add(k);
         unique.push(f);
       }
     }
-    const promises = unique.map((f) => figma.loadFontAsync(f).catch(() => {}));
-    if (promises.length) await Promise.all(promises);
+
+    for (const font of unique) {
+      try {
+        await figma.loadFontAsync(font);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    return true;
   } catch (e) {
-    // ignore
+    return false;
   }
 }
 
 /* Load fonts used by a text node; safe wrapper */
 async function safeLoadFontsForNode(node) {
   try {
-    const segments = node.getStyledTextSegments(["fontName"]);
-    const fonts = [];
-    for (const seg of segments) {
-      const font = seg.fontName;
-      if (typeof font === "object" && font.family && font.style) {
-        fonts.push(font);
-      }
+    if (!node || node.type !== "TEXT") return false;
+    if (node.hasMissingFont) {
+      debugLog("Skipping text mutation due to missing font", { nodeId: node.id });
+      return false;
     }
-    await safeLoadFonts(fonts);
+
+    const fonts = node.getRangeAllFontNames(0, node.characters.length) || [];
+    const loaded = await safeLoadFonts(fonts);
+    return !!loaded;
   } catch (e) {
-    // ignore
+    return false;
   }
 }
 
@@ -876,12 +1376,47 @@ figma.ui.onmessage = async (msg) => {
     figma.ui.postMessage({ type: "run-result", results });
     return;
   }
+  if (msg.type === "recover-stale-on-selection") {
+    const nodes = gatherTextNodesFromSelectionOrPage(true);
+    const results = [];
+    for (const n of nodes) {
+      const r = await recoverStaleBackupInNode(n);
+      results.push({
+        id: n.id,
+        recovered: !!r.recovered,
+        recoveredCount: r.recoveredCount || 0,
+        totalCandidates: r.totalCandidates || 0,
+        skipped: !!r.skipped,
+        reason: r.reason || "",
+      });
+    }
+    figma.ui.postMessage({ type: "run-result", results });
+    return;
+  }
+  if (msg.type === "recover-stale-on-page") {
+    const nodes = gatherTextNodesFromSelectionOrPage(false);
+    const results = [];
+    for (const n of nodes) {
+      const r = await recoverStaleBackupInNode(n);
+      results.push({
+        id: n.id,
+        recovered: !!r.recovered,
+        recoveredCount: r.recoveredCount || 0,
+        totalCandidates: r.totalCandidates || 0,
+        skipped: !!r.skipped,
+        reason: r.reason || "",
+      });
+    }
+    figma.ui.postMessage({ type: "run-result", results });
+    return;
+  }
   if (msg.type === "autocomplete-apply") {
     try {
       const { text, wordStart, wordEnd, nodeId } = msg;
       const node = await figma.getNodeByIdAsync(nodeId);
       if (node && node.type === "TEXT") {
-        await safeLoadFontsForNode(node);
+        const fontsReady = await safeLoadFontsForNode(node);
+        if (!fontsReady) return;
         node.deleteCharacters(wordStart, wordEnd);
         node.insertCharacters(wordStart, text, "BEFORE");
 

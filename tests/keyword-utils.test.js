@@ -13,6 +13,11 @@ import {
   computeIconMappingHashFromEntries,
   migrateBackupPayloadForTests,
   resolvePlaceholdersInText,
+  stripTrailingPunctuationForTests,
+  findBestRecoveryCandidateForTests,
+  buildIconGlyphToTokenAliasMapForTests,
+  simulateFallbackIconFontGlyphRecoveryForTests,
+  isFontMatchForTests,
 } from "./keyword-utils.js";
 
 describe("PLACEHOLDER_REGEX / extractPlaceholders", () => {
@@ -379,6 +384,143 @@ describe("v2 backup migration and integrity checks", () => {
     ]);
 
     expect(a).toBe(b);
+  });
+});
+
+describe("stale recovery helper behaviors", () => {
+  test("strips trailing punctuation from stale recovery candidates", () => {
+    expect(stripTrailingPunctuationForTests("w.")).toBe("w");
+    expect(stripTrailingPunctuationForTests("q!?")).toBe("q");
+    expect(stripTrailingPunctuationForTests("x")).toBe("x");
+  });
+
+  test("finds candidate by using punctuation-stripped variant near anchor", () => {
+    const text = "I gain +1q for each tinker in play.w";
+    const anchor = text.lastIndexOf("w");
+    const best = findBestRecoveryCandidateForTests(text, ["w."], anchor, 24);
+
+    expect(best).not.toBeNull();
+    expect(best).toEqual({
+      start: anchor,
+      len: 1,
+      value: "w",
+    });
+  });
+
+  test("prefers nearest candidate within recovery window", () => {
+    const text = "aaa w bbb w ccc";
+    const firstW = text.indexOf("w");
+    const secondW = text.lastIndexOf("w");
+
+    const bestNearSecond = findBestRecoveryCandidateForTests(
+      text,
+      ["w"],
+      secondW,
+      24,
+    );
+
+    expect(bestNearSecond).not.toBeNull();
+    expect(bestNearSecond.start).toBe(secondW);
+    expect(bestNearSecond.len).toBe(1);
+
+    const bestNearFirst = findBestRecoveryCandidateForTests(text, ["w"], firstW, 24);
+    expect(bestNearFirst).not.toBeNull();
+    expect(bestNearFirst.start).toBe(firstW);
+  });
+
+  test("returns null when no candidate appears in the allowed window", () => {
+    const text = "prefix w suffix";
+    const anchorFarAway = text.length - 1;
+    const best = findBestRecoveryCandidateForTests(
+      text,
+      ["w"],
+      anchorFarAway,
+      1,
+    );
+
+    expect(best).toBeNull();
+  });
+});
+
+describe("alias glyph map and icon-font fallback scan simulation", () => {
+  test("glyph collisions are treated as aliases with deterministic canonical key", () => {
+    const map = buildIconGlyphToTokenAliasMapForTests([
+      { tokenKey: "icon/shield", glyph: "w" },
+      { tokenKey: "icon/defense", glyph: "w" },
+      { tokenKey: "icon/attack", glyph: "q" },
+    ]);
+
+    expect(map.w).toBe("icon/defense");
+    expect(map.q).toBe("icon/attack");
+  });
+
+  test("fallback scan only replaces glyphs inside icon-font segments", () => {
+    const text = "ATK w DEF q";
+    const result = simulateFallbackIconFontGlyphRecoveryForTests({
+      text,
+      iconFontFamily: "Game Icons",
+      iconFontStyle: "Regular",
+      glyphToToken: {
+        w: "icon/defense",
+        q: "icon/attack",
+      },
+      segments: [
+        { start: 0, end: 4, fontName: { family: "Inter", style: "Regular" } },
+        { start: 4, end: 5, fontName: { family: "Game Icons", style: "Regular" } },
+        { start: 5, end: 11, fontName: { family: "Inter", style: "Regular" } },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("ATK @icon/defense DEF q");
+    expect(result.replacements).toHaveLength(1);
+    expect(result.replacements[0].glyph).toBe("w");
+  });
+
+  test("family-only font fallback still matches when style differs", () => {
+    expect(
+      isFontMatchForTests(
+        { family: "Game Icons", style: "Solid" },
+        "Game Icons",
+        "Regular",
+        true,
+      ),
+    ).toBe(true);
+
+    const text = "Xw";
+    const result = simulateFallbackIconFontGlyphRecoveryForTests({
+      text,
+      iconFontFamily: "Game Icons",
+      iconFontStyle: "Regular",
+      glyphToToken: { w: "icon/defense" },
+      segments: [
+        { start: 0, end: 1, fontName: { family: "Inter", style: "Regular" } },
+        { start: 1, end: 2, fontName: { family: "Game Icons", style: "Solid" } },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("X@icon/defense");
+  });
+
+  test("fallback scan handles adjacent glyphs in one icon-font segment", () => {
+    const text = "qw";
+    const result = simulateFallbackIconFontGlyphRecoveryForTests({
+      text,
+      iconFontFamily: "Game Icons",
+      iconFontStyle: "Regular",
+      glyphToToken: {
+        q: "icon/attack",
+        w: "icon/defense",
+      },
+      segments: [
+        { start: 0, end: 2, fontName: { family: "Game Icons", style: "Regular" } },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe("@icon/attack@icon/defense");
+    expect(result.replacements).toHaveLength(2);
   });
 });
 
