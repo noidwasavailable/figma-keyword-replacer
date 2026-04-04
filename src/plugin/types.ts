@@ -49,3 +49,19 @@ export interface PluginRuntimeState {
 	lastSelectedNodeId: string | null;
 	processing: boolean;
 }
+
+export type PluginMessage = {
+	type?: string;
+	autocompleteVars?: string[];
+	collections?: string[];
+	enabled?: boolean;
+	collection?: string;
+	iconFontFamily?: string;
+	iconFontStyle?: string;
+	query?: string;
+	wordStart?: number;
+	wordEnd?: number;
+	nodeId?: string;
+	text?: string;
+	results?: unknown[];
+};

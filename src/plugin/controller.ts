@@ -1,3 +1,4 @@
+import { PLUGIN_MESSAGE_ID } from "../CONSTANTS";
 import { clearNodeBackup, readNodeBackup } from "./backup";
 import { DEBUG_LOGS, UI_DEFAULT_HEIGHT, UI_DEFAULT_WIDTH } from "./constants";
 import { safeLoadFontsForNode } from "./fonts";
@@ -92,14 +93,14 @@ function handleTextEditForAutocomplete(
 
 	if (word.startsWith("@")) {
 		figma.ui.postMessage({
-			type: "autocomplete-query",
+			type: PLUGIN_MESSAGE_ID.AUTOCOMPLETE_QUERY,
 			query: word.slice(1),
 			wordStart,
 			wordEnd,
 			nodeId: node.id,
 		});
 	} else {
-		figma.ui.postMessage({ type: "autocomplete-close" });
+		figma.ui.postMessage({ type: PLUGIN_MESSAGE_ID.AUTOCOMPLETE_CLOSE });
 	}
 }
 
@@ -190,7 +191,7 @@ export async function startPluginController(): Promise<void> {
 			});
 		}
 
-		figma.ui.postMessage({ type: "run-result", results });
+		figma.ui.postMessage({ type: PLUGIN_MESSAGE_ID.RUN_RESULT, results });
 	}
 
 	async function handleSelectionChange(): Promise<void> {
@@ -246,7 +247,7 @@ export async function startPluginController(): Promise<void> {
 			state.activeNodeOriginalText = newSelectedNode.characters;
 		} else {
 			state.activeNodeOriginalText = "";
-			figma.ui.postMessage({ type: "autocomplete-close" });
+			figma.ui.postMessage({ type: PLUGIN_MESSAGE_ID.AUTOCOMPLETE_CLOSE });
 		}
 
 		state.lastSelectedNodeId = newId;
@@ -329,7 +330,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "run-on-selection") {
+		if (type === PLUGIN_MESSAGE_ID.RUN_ON_SELECTION) {
 			await runOnNodes(
 				gatherTextNodesFromSelectionOrPage({ useSelectionOnly: true }),
 				"replace",
@@ -337,7 +338,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "restore-on-selection") {
+		if (type === PLUGIN_MESSAGE_ID.RESTORE_ON_SELECTION) {
 			await runOnNodes(
 				gatherTextNodesFromSelectionOrPage({ useSelectionOnly: true }),
 				"restore",
@@ -345,7 +346,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "run-on-page") {
+		if (type === PLUGIN_MESSAGE_ID.RUN_ON_PAGE) {
 			await runOnNodes(
 				gatherTextNodesFromSelectionOrPage({ useSelectionOnly: false }),
 				"replace",
@@ -353,7 +354,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "restore-on-page") {
+		if (type === PLUGIN_MESSAGE_ID.RESTORE_ON_PAGE) {
 			await runOnNodes(
 				gatherTextNodesFromSelectionOrPage({ useSelectionOnly: false }),
 				"restore",
@@ -361,7 +362,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "recover-stale-on-selection") {
+		if (type === PLUGIN_MESSAGE_ID.RECOVER_STALE_ON_SELECTION) {
 			await runOnNodes(
 				gatherTextNodesFromSelectionOrPage({ useSelectionOnly: true }),
 				"recover-stale",
@@ -369,7 +370,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "recover-stale-on-page") {
+		if (type === PLUGIN_MESSAGE_ID.RECOVER_STALE_ON_PAGE) {
 			await runOnNodes(
 				gatherTextNodesFromSelectionOrPage({ useSelectionOnly: false }),
 				"recover-stale",
@@ -377,7 +378,7 @@ export async function startPluginController(): Promise<void> {
 			return;
 		}
 
-		if (type === "autocomplete-apply") {
+		if (type === PLUGIN_MESSAGE_ID.AUTOCOMPLETE_APPLY) {
 			const text = asString(msg.text);
 			const nodeId = asString(msg.nodeId);
 			const wordStart = asNumber(msg.wordStart);
@@ -396,26 +397,26 @@ export async function startPluginController(): Promise<void> {
 				node.insertCharacters(wordStart, text, "BEFORE");
 
 				state.activeNodeOriginalText = node.characters;
-				figma.ui.postMessage({ type: "autocomplete-close" });
+				figma.ui.postMessage({ type: PLUGIN_MESSAGE_ID.AUTOCOMPLETE_CLOSE });
 			} catch (error) {
 				console.warn("Failed to apply autocomplete", error);
 			}
 			return;
 		}
 
-		if (type === "resize") {
+		if (type === PLUGIN_MESSAGE_ID.RESIZE) {
 			const width = asNumber(msg.width);
 			const height = asNumber(msg.height);
 			if (width !== null && height !== null) figma.ui.resize(width, height);
 			return;
 		}
 
-		if (type === "hide") {
+		if (type === PLUGIN_MESSAGE_ID.HIDE) {
 			figma.ui.hide();
 			return;
 		}
 
-		if (type === "close") {
+		if (type === PLUGIN_MESSAGE_ID.CLOSE) {
 			figma.closePlugin();
 		}
 	};

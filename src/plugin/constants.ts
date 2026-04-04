@@ -1,3 +1,5 @@
+import { PLUGIN_WINDOW_HEIGHT, PLUGIN_WINDOW_WIDTH } from "../CONSTANTS";
+
 export const PLACEHOLDER_REGEX = /@[\w-]+(?:\/[\w-]+)*\b/g;
 
 export const PLUGIN_DATA_KEY = "prr:backup";
@@ -9,5 +11,5 @@ export const DEFAULT_ICON_FONT_STYLE = "Regular";
 export const BACKUP_SCHEMA_VERSION = 2;
 export const DEBUG_LOGS = false;
 
-export const UI_DEFAULT_WIDTH = 420;
-export const UI_DEFAULT_HEIGHT = 530;
+export const UI_DEFAULT_WIDTH = PLUGIN_WINDOW_WIDTH;
+export const UI_DEFAULT_HEIGHT = PLUGIN_WINDOW_HEIGHT;
