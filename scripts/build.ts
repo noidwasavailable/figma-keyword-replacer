@@ -122,7 +122,7 @@ async function copyManifestToDist(): Promise<void> {
 	await copyFile(paths.manifestIn, paths.manifestOut);
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
 	await ensureCleanDistDir();
 
 	await buildPluginCode();
@@ -137,4 +137,4 @@ async function main(): Promise<void> {
 	});
 }
 
-await main();
+if (import.meta.path === Bun.main) await main();
