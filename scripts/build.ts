@@ -122,19 +122,20 @@ async function copyManifestToDist(): Promise<void> {
 	await copyFile(paths.manifestIn, paths.manifestOut);
 }
 
-export async function main(): Promise<void> {
+export async function main(): Promise<string> {
 	await ensureCleanDistDir();
 
 	await buildPluginCode();
 	await buildStandaloneUiHtml();
 	await copyManifestToDist();
 
-	console.log("Built FigPlugin outputs:", {
-		code: "dist/code.js",
-		ui: "dist/ui.html",
-		manifest: "dist/manifest.json",
-		uiMode: "standalone-html",
-	});
+	const returnString = `Built FigPlugin outputs:
+- code: ${paths.codeOut}
+- ui: ${paths.uiOut}
+- manifest: ${paths.manifestOut}
+- uiMode: standalone-html
+`;
+	return returnString;
 }
 
 if (import.meta.path === Bun.main) await main();
