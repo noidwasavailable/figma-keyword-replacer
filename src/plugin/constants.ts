@@ -9,7 +9,6 @@ export const DEFAULT_COLLECTION_NAME = "Keywords";
 export const DEFAULT_ICON_FONT_STYLE = "Regular";
 
 export const BACKUP_SCHEMA_VERSION = 2;
-export const DEBUG_LOGS = false;
 
 export const UI_DEFAULT_WIDTH = PLUGIN_WINDOW_WIDTH;
 export const UI_DEFAULT_HEIGHT = PLUGIN_WINDOW_HEIGHT;

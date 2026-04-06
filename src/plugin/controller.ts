@@ -1,6 +1,6 @@
 import { PLUGIN_MESSAGE_ID } from "../CONSTANTS";
 import { clearNodeBackup, readNodeBackup } from "./backup";
-import { DEBUG_LOGS, UI_DEFAULT_HEIGHT, UI_DEFAULT_WIDTH } from "./constants";
+import { UI_DEFAULT_HEIGHT, UI_DEFAULT_WIDTH } from "./constants";
 import { safeLoadFontsForNode } from "./fonts";
 import { gatherTextNodesFromSelectionOrPage } from "./nodes";
 import { createRuntimeState, saveDocSettings } from "./state";
@@ -14,7 +14,6 @@ import { createDebugLogger } from "./utils";
 
 type UiMessage = Record<string, unknown>;
 
-const debugLog = createDebugLogger(DEBUG_LOGS);
 let started = false;
 
 function asString(value: unknown): string {
@@ -32,7 +31,10 @@ function getSelectedSingleTextNode(): TextNode | null {
 	return node.type === "TEXT" ? node : null;
 }
 
-function buildProcessingOptions(state: ReturnType<typeof createRuntimeState>) {
+function buildProcessingOptions(
+	state: ReturnType<typeof createRuntimeState>,
+	debugLog: ReturnType<typeof createDebugLogger>,
+) {
 	return {
 		collectionName: state.chosenCollection,
 		iconFontFamily: state.iconFontFamily,
@@ -123,11 +125,12 @@ async function getAutocompleteVarNames(
 	}
 }
 
-export async function startPluginController(): Promise<void> {
+export async function startPluginController(debug = false): Promise<void> {
 	if (started) return;
 	started = true;
 
 	const state = createRuntimeState();
+	const debugLog = createDebugLogger(debug);
 
 	figma.showUI(__html__, {
 		width: UI_DEFAULT_WIDTH,
@@ -162,7 +165,7 @@ export async function startPluginController(): Promise<void> {
 			if (operation === "replace") {
 				const r = await replacePlaceholdersInNode(
 					node,
-					buildProcessingOptions(state),
+					buildProcessingOptions(state, debugLog),
 				);
 				results.push({ id: node.id, changed: r.changed });
 				continue;
@@ -171,7 +174,7 @@ export async function startPluginController(): Promise<void> {
 			if (operation === "restore") {
 				const r = await restorePlaceholdersInNode(
 					node,
-					buildProcessingOptions(state),
+					buildProcessingOptions(state, debugLog),
 				);
 				results.push({ id: node.id, restored: r.restored });
 				continue;
@@ -179,7 +182,7 @@ export async function startPluginController(): Promise<void> {
 
 			const r = await recoverStaleBackupInNode(
 				node,
-				buildProcessingOptions(state),
+				buildProcessingOptions(state, debugLog),
 			);
 			results.push({
 				id: node.id,
@@ -214,7 +217,7 @@ export async function startPluginController(): Promise<void> {
 				if (prevNode && prevNode.type === "TEXT") {
 					const result = await replacePlaceholdersInNode(
 						prevNode,
-						buildProcessingOptions(state),
+						buildProcessingOptions(state, debugLog),
 					);
 					debugLog("Replace result", { nodeId: prevNode.id, result });
 				}
@@ -233,7 +236,7 @@ export async function startPluginController(): Promise<void> {
 				state.processing = true;
 				const result = await restorePlaceholdersInNode(
 					newSelectedNode,
-					buildProcessingOptions(state),
+					buildProcessingOptions(state, debugLog),
 				);
 				debugLog("Restore result", { nodeId: newSelectedNode.id, result });
 			} catch (error) {
