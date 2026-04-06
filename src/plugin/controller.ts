@@ -261,7 +261,7 @@ export async function startPluginController(): Promise<void> {
 
 	void figma.loadAllPagesAsync().then(() => {
 		figma.on("documentchange", async (event) => {
-			if (!state.featureEnabled || !state.lastSelectedNodeId) return;
+			if (!state.featureEnabled || !state.lastSelectedNodeId || state.processing) return;
 
 			for (const change of event.documentChanges) {
 				if (
