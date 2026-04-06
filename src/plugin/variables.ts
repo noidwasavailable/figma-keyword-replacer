@@ -145,7 +145,7 @@ export async function buildIconGlyphToTokenMap(
 
 	const seeded = seedValuesByToken ?? {};
 	for (const tokenKey in seeded) {
-		if (!Object.hasOwn(Object.prototype, seeded)) continue;
+		if (!(tokenKey in seeded)) continue;
 		markGlyphToken(seeded[tokenKey], tokenKey);
 	}
 

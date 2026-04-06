@@ -429,6 +429,49 @@ export function buildIconGlyphToTokenAliasMapForTests(entries) {
 }
 
 /**
+ * Build glyph -> token map from seed values (mirrors the fixed seed loop
+ * in the plugin's buildIconGlyphToTokenMap).
+ *
+ * `seedValuesByToken` shape: { [tokenKey]: glyphValue }
+ * `extraEntries` shape: [{ tokenKey, glyph }]
+ */
+export function buildIconGlyphToTokenMapFromSeedForTests(
+  seedValuesByToken,
+  extraEntries,
+) {
+  const map = {};
+
+  const markGlyphToken = (glyph, tokenKey) => {
+    const g = String(glyph ?? "");
+    const key = normalizeVariableName(tokenKey);
+    if (!g || !key || !key.startsWith("icon/")) return;
+
+    if (!(g in map)) {
+      map[g] = key;
+      return;
+    }
+
+    if (map[g] !== key) {
+      map[g] = map[g] < key ? map[g] : key;
+    }
+  };
+
+  const seeded = seedValuesByToken ?? {};
+  for (const tokenKey in seeded) {
+    if (!(tokenKey in seeded)) continue;
+    markGlyphToken(seeded[tokenKey], tokenKey);
+  }
+
+  for (const entry of extraEntries ?? []) {
+    const tokenKey = normalizeVariableName(entry?.tokenKey ?? entry?.key);
+    const glyph = String(entry?.glyph ?? entry?.value ?? "");
+    markGlyphToken(glyph, tokenKey);
+  }
+
+  return map;
+}
+
+/**
  * Pure icon-font fallback scan simulation:
  * scans only segments matching icon font and converts mapped glyphs to placeholders.
  *

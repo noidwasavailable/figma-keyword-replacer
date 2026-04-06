@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	BACKUP_SCHEMA_VERSION,
 	buildIconGlyphToTokenAliasMapForTests,
+	buildIconGlyphToTokenMapFromSeedForTests,
 	computeIconMappingHashFromEntries,
 	extractPlaceholders,
 	findBestRecoveryCandidateForTests,
@@ -577,5 +578,200 @@ describe("no-corruption invariants", () => {
 			expect(result.text).toBe(text);
 			expect(result.text).not.toContain("@icon/defense");
 		}
+	});
+});
+
+describe("seed-based glyph-to-token map building", () => {
+	test("seed values are correctly included in the glyph map", () => {
+		const map = buildIconGlyphToTokenMapFromSeedForTests(
+			{
+				"icon/defense": "◆",
+				"icon/attack": "✦",
+			},
+			[],
+		);
+
+		expect(map["◆"]).toBe("icon/defense");
+		expect(map["✦"]).toBe("icon/attack");
+	});
+
+	test("seed values and extra entries are merged", () => {
+		const map = buildIconGlyphToTokenMapFromSeedForTests(
+			{ "icon/defense": "◆" },
+			[{ tokenKey: "icon/attack", glyph: "✦" }],
+		);
+
+		expect(map["◆"]).toBe("icon/defense");
+		expect(map["✦"]).toBe("icon/attack");
+	});
+
+	test("seed collision resolves to deterministic canonical key", () => {
+		const map = buildIconGlyphToTokenMapFromSeedForTests(
+			{
+				"icon/shield": "w",
+				"icon/defense": "w",
+			},
+			[],
+		);
+
+		// Deterministic: alphabetically smaller key wins
+		expect(map.w).toBe("icon/defense");
+	});
+
+	test("non-icon seed keys are ignored", () => {
+		const map = buildIconGlyphToTokenMapFromSeedForTests(
+			{
+				character: "Bob",
+				"icon/defense": "◆",
+			},
+			[],
+		);
+
+		expect(map["◆"]).toBe("icon/defense");
+		expect(map.Bob).toBeUndefined();
+	});
+
+	test("empty seed still works when extra entries provided", () => {
+		const map = buildIconGlyphToTokenMapFromSeedForTests({}, [
+			{ tokenKey: "icon/fire", glyph: "🔥" },
+		]);
+
+		expect(map["🔥"]).toBe("icon/fire");
+	});
+});
+
+describe("fallback icon-font scan with multi-character glyphs", () => {
+	test("handles surrogate-pair emoji glyphs", () => {
+		const text = "ATK 🗡️ DEF 🛡️";
+		const swordEnd = 4 + "🗡️".length;
+		const shieldStart = swordEnd + " DEF ".length;
+		const shieldEnd = shieldStart + "🛡️".length;
+
+		const result = simulateFallbackIconFontGlyphRecoveryForTests({
+			text,
+			iconFontFamily: "Game Icons",
+			iconFontStyle: "Regular",
+			glyphToToken: {
+				"🗡️": "icon/attack",
+				"🛡️": "icon/defense",
+			},
+			segments: [
+				{ start: 0, end: 4, fontName: { family: "Inter", style: "Regular" } },
+				{
+					start: 4,
+					end: swordEnd,
+					fontName: { family: "Game Icons", style: "Regular" },
+				},
+				{ start: swordEnd, end: shieldStart, fontName: { family: "Inter", style: "Regular" } },
+				{
+					start: shieldStart,
+					end: shieldEnd,
+					fontName: { family: "Game Icons", style: "Regular" },
+				},
+			],
+		});
+
+		expect(result.changed).toBe(true);
+		expect(result.text).toBe("ATK @icon/attack DEF @icon/defense");
+		expect(result.replacements).toHaveLength(2);
+	});
+
+	test("multi-char glyph strings are matched greedily (longest first)", () => {
+		const text = "ab";
+		const result = simulateFallbackIconFontGlyphRecoveryForTests({
+			text,
+			iconFontFamily: "Game Icons",
+			iconFontStyle: "Regular",
+			glyphToToken: {
+				a: "icon/single",
+				ab: "icon/double",
+			},
+			segments: [
+				{
+					start: 0,
+					end: 2,
+					fontName: { family: "Game Icons", style: "Regular" },
+				},
+			],
+		});
+
+		expect(result.changed).toBe(true);
+		expect(result.text).toBe("@icon/double");
+		expect(result.replacements).toHaveLength(1);
+	});
+});
+
+describe("fallback scan boundary safety", () => {
+	test("same character in normal font is NOT replaced", () => {
+		const text = "w in normal text and w in icon font";
+		const iconW = text.lastIndexOf("w");
+		const result = simulateFallbackIconFontGlyphRecoveryForTests({
+			text,
+			iconFontFamily: "Game Icons",
+			iconFontStyle: "Regular",
+			glyphToToken: { w: "icon/defense" },
+			segments: [
+				{
+					start: 0,
+					end: iconW,
+					fontName: { family: "Inter", style: "Regular" },
+				},
+				{
+					start: iconW,
+					end: iconW + 1,
+					fontName: { family: "Game Icons", style: "Regular" },
+				},
+				{
+					start: iconW + 1,
+					end: text.length,
+					fontName: { family: "Inter", style: "Regular" },
+				},
+			],
+		});
+
+		expect(result.changed).toBe(true);
+		expect(result.replacements).toHaveLength(1);
+		expect(result.replacements[0].start).toBe(iconW);
+		// The normal "w" characters should remain untouched
+		expect(result.text.startsWith("w in normal text and ")).toBe(true);
+	});
+
+	test("empty glyph map produces no changes", () => {
+		const text = "some text";
+		const result = simulateFallbackIconFontGlyphRecoveryForTests({
+			text,
+			iconFontFamily: "Game Icons",
+			iconFontStyle: "Regular",
+			glyphToToken: {},
+			segments: [
+				{
+					start: 0,
+					end: text.length,
+					fontName: { family: "Game Icons", style: "Regular" },
+				},
+			],
+		});
+
+		expect(result.changed).toBe(false);
+		expect(result.text).toBe(text);
+	});
+
+	test("no icon font family means no recovery", () => {
+		const text = "w";
+		const result = simulateFallbackIconFontGlyphRecoveryForTests({
+			text,
+			iconFontFamily: "",
+			iconFontStyle: "Regular",
+			glyphToToken: { w: "icon/defense" },
+			segments: [
+				{
+					start: 0,
+					end: 1,
+					fontName: { family: "Game Icons", style: "Regular" },
+				},
+			],
+		});
+
+		expect(result.changed).toBe(false);
 	});
 });

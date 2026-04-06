@@ -366,19 +366,17 @@ async function attemptStaleBackupRecovery(
 
 	let fallbackRecoveredCount = 0;
 
-	if (recoveredCount === 0) {
-		try {
-			const fallback = await fallbackRecoverByIconFontScan(
-				node,
-				backup,
-				currentValuesByToken,
-				resolved,
-			);
-			fallbackRecoveredCount = fallback?.recoveredCount || 0;
-			recoveredCount += fallbackRecoveredCount;
-		} catch (error) {
-			console.warn("Fallback icon-font stale recovery failed", error);
-		}
+	try {
+		const fallback = await fallbackRecoverByIconFontScan(
+			node,
+			backup,
+			currentValuesByToken,
+			resolved,
+		);
+		fallbackRecoveredCount = fallback?.recoveredCount || 0;
+		recoveredCount += fallbackRecoveredCount;
+	} catch (error) {
+		console.warn("Fallback icon-font stale recovery failed", error);
 	}
 
 	return {
@@ -729,10 +727,23 @@ export async function recoverStaleBackupInNode(
 		}
 	}
 
+	const iconTokenKeys: string[] = [];
+	const replacements = (backup as BackupPayloadV2 | null)?.replacements || [];
+	for (const rep of replacements) {
+		const tokenKey = normalizeTokenKey(rep?.tokenKey || rep?.originalText || "");
+		if (tokenKey && isIconTokenKey(tokenKey)) iconTokenKeys.push(tokenKey);
+	}
+
+	const currentValuesByToken = await resolveCurrentValuesForTokenKeys(
+		(backup as BackupPayloadV2 | null)?.collection || resolved.collectionName,
+		iconTokenKeys,
+		node,
+	);
+
 	const fallback = await fallbackRecoverByIconFontScan(
 		node,
 		(backup as BackupPayloadV2 | null) || null,
-		{},
+		currentValuesByToken,
 		resolved,
 	);
 	const recoveredCount = fallback?.recoveredCount || 0;
